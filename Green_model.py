@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.integrate import solve_ivp
+import scipy
 import matplotlib.pyplot as plt
 
 # --- Heart-model parameters (eqn 31) ---
@@ -48,10 +49,10 @@ def C1(Ved): return 9.7e-6*Ved**2 - 2.8e-4*Ved + 0.12
 def C2(Ved): return 0.06
 def C3(Ved): return -40.2e-6*Ved**2 + 4.78e-3*Ved + 0.06
 D = 100.0
-
+scale = 100.0   # empirical correction to Ai(Ved) amplitudes to reach physiological pressures
 def E_H(Ved, t):
     s = 0.0
-    for A, B, C in [(A1(Ved),B1(Ved),C1(Ved)), (A2(Ved),B2(Ved),C2(Ved)), (A3(Ved),B3(Ved),C3(Ved))]:
+    for A, B, C in [(scale*A1(Ved),B1(Ved),C1(Ved)), (scale*A2(Ved),B2(Ved),C2(Ved)), (scale*A3(Ved),B3(Ved),C3(Ved))]:
         s += A * np.exp(-(B**2) * (t - C)**2)
     return s + D
 
@@ -96,26 +97,31 @@ def P_A(x3, dx3):
 #P_A_ejection(sol_ejection.y[2,-1], sol_ejection.y[2,-1])
 
 
-def aorta_valve_iso_event(t, x, Ved):
+def aorta_valve_iso_event(t, x):
     x1, x2, x3, x4 = x   # x1=V_CR, x2=Vv, x3=V_CL, x4=flow through L
     dx3 = (-x3-RL*x4) / (CL * (R1 + RL))
-    Pv = E_H(Ved, t) * x[1]
-    print(Pv, P_A(x3, dx3))
+    Pv = E_H(x2, t) * x[1]
     return P_A(x3, dx3) - Pv   # nul når Pv netop når PA
+aorta_valve_iso_event.terminal = True
+aorta_valve_iso_event.direction = -1
 
-def aorta_valve_ejection_event(t, x, Ved):
+
+
+def aorta_valve_ejection_event(t, x):
     x1, x2, x3, x4 = x   # x1=V_CR, x2=Vv, x3=V_CL, x4=flow through L
     dx3 = (RL * E_H(x2,t)-(RL+Ra)*x3-RL*Ra*x4) / (CL * RT)
-    Pv = E_H(Ved, t) * x[1]
-    print(Pv, P_A(x3, dx3))
+    Pv = E_H(x2, t) * x[1]
     return P_A(x3, dx3) - Pv   # nul når Pv netop når PA
+aorta_valve_ejection_event.terminal = True
+aorta_valve_ejection_event.direction = -1
 
 
-
-def mitral_valve_event(t, x, Vv):
-    Pv = E_p(Vv) * x[1]
-    print(Pv)
-    return 10 - Pv   # nul når Pv netop når PA
+def mitral_valve_event(t, x):
+    Pv = E_p(x[1]) * x[1]
+    #print(Pv)
+    return 10- Pv   # nul når Pv netop når PA
+mitral_valve_event.terminal = True
+mitral_valve_event.direction = -1
 
 
 
@@ -131,7 +137,7 @@ def store(sol, phase):
     record_phase.append(phase)
 
 
-t_span = (0, 2)   # typical diastolic filling window
+t_span = (0, 1)   # typical diastolic filling window
 t_eval = np.linspace(*t_span, 2000)
 max_step = 1e-3
 
@@ -144,28 +150,30 @@ for i in range(10):
          x0 = [sol_isovolumic.y[0,-1], sol_isovolumic.y[1,-1], sol_isovolumic.y[2,-1], sol_isovolumic.y[3,-1]]  # final state of filling phase
         
 
-    sol_ejection = solve_ivp(ejection, t_span, x0, t_eval=t_eval, max_step=max_step,
-                             events=lambda t, x: aorta_valve_ejection_event(t, x, x[1]), terminal=True)
+    sol_ejection = solve_ivp(ejection, t_span, x0, max_step=max_step,
+                             events=aorta_valve_ejection_event)
     print("Ejection phase completed. Event at t =", sol_ejection.t_events)
+    print(sol_ejection.status)
+    print(sol_ejection.message)
     store(sol_ejection, "ejection")
     # Isovolumic relaxation phase
     x0 = [sol_ejection.y[0,-1], sol_ejection.y[1,-1], sol_ejection.y[2,-1], sol_ejection.y[3,-1]]  # final state of ejection phase
   
-    sol_isovolumic = solve_ivp(isovolumic, t_span, x0, t_eval=t_eval, max_step=max_step,
-                                events=lambda t, x: mitral_valve_event(t, x, x[1]), terminal=True)
+    sol_isovolumic = solve_ivp(isovolumic, t_span, x0, max_step=max_step,
+                                events=mitral_valve_event)
     print("Isovolumic relaxation phase completed. Event at t =", sol_isovolumic.t_events)
     store(sol_isovolumic, "relaxation")
 
     # Filling phase
     x0 = [sol_isovolumic.y[0,-1], sol_isovolumic.y[1,-1], sol_isovolumic.y[2,-1], sol_isovolumic.y[3,-1]]  # final state of filling phase
     sol_filling = solve_ivp(filling_rhs, t_span, x0, 
-                            t_eval=t_eval, max_step=max_step, events=lambda t, x: mitral_valve_event(t, x, x[1]), terminal=True)
+                             max_step=max_step, events=mitral_valve_event)
     print("Filling phase completed. Event at t =", sol_filling.t_events)
     store(sol_filling, "filling")
     # Isovolumic contraction phase
     x0 = [sol_filling.y[0,-1], sol_filling.y[1,-1], sol_filling.y[2,-1], sol_filling.y[3,-1]]  # final state of filling phase
-    sol_isovolumic = solve_ivp(isovolumic, t_span, x0, t_eval=t_eval, max_step=max_step,
-                                events=lambda t, x: aorta_valve_iso_event(t, x, x[1]), terminal=True)
+    sol_isovolumic = solve_ivp(isovolumic, t_span, x0, max_step=max_step,
+                                events= aorta_valve_iso_event)
     print("Isovolumic contraction phase completed. Event at t =", sol_isovolumic.t_events)
     store(sol_isovolumic, "contraction")
     
