@@ -21,9 +21,8 @@ RG = Rb *(1+R2/(RR+R2))   # total resistance, mmHg*s/l
 # ---------- Passive elastance (eqn 18, 30) ----------
 h0, h1, h2 = 0.234, 147.0, 106000.0
 def E_p(Vv):
-    return h2*Vv**2 + h1*Vv + h0
+    return h2*Vv + h1 + h0/Vv
     #return 2+h2*Vv + h1
-
 
 # ---------- Active elastance (eqn 17, 20-29) ----------
 # CAUTION: these amplitude coefficients give a peak E_H far below Fig.5's
@@ -34,7 +33,9 @@ def A1(Ved):
     if Ved <= 0.055:
         return 2.1e-3*Ved**2 - 0.2338*Ved + 10.6
     else:
+        print("Hey")
         return -1.0133e-3*Ved**2 - 0.0626*Ved + 10.6
+        
 
 def A2(Ved): return 150.0
 def A3(Ved): 
