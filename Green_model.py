@@ -9,10 +9,12 @@ log_file = open("Green_model_log.txt", "w")
 sys.stdout = log_file
 
 # --- Heart-model parameters (eqn 31) ---
-Rm  = 12      # mitral valve resistance, mmHg*s/l
+Rm  = 12      # mitral valve resistance, mmHg*s/l (altered from 0.33 to 12 to match the correct physiological range)
 PAS = 10.0      # atrial source pressure, mmHg
-Ra  = 0.60
-Fix_factor = 0.0045 
+Ra  = 200 # Changed from 0.60
+Fix_factor_passive = 0.0045     
+Fix_factor_ej = 0.04
+Fix_factor_iso = 0.2
 # --- Arterial-load parameters (eqn 32) ---
 CL = 2.35e-4    # l/mmHg
 R1 = 60.0       # mmHg*s/l
@@ -31,7 +33,7 @@ def E_p(Vv):
     #return 2+h2*Vv + h1
 
 def Pv(Vv):
-    return (h2*Vv**2 + h1*Vv + h0) * Fix_factor
+    return (h2*Vv**2 + h1*Vv + h0) * Fix_factor_passive
 
 # ---------- Active elastance (eqn 17, 20-29) ----------
 # CAUTION: these amplitude coefficients give a peak E_H far below Fig.5's
@@ -43,8 +45,6 @@ def A1(Ved):
         return 2.1e-3*Ved**2 - 0.2338*Ved + 10.6
     else:
         return -1.0133e-3*Ved**2 - 0.0626*Ved + 10.6
-        
-
 def A2(Ved): return 150.0
 def A3(Ved): 
     if Ved <= 0.055:
@@ -65,6 +65,8 @@ def E_H(Ved, t):
         s += A * np.exp(-(B**2) * (t - C)**2)
     return s + D
 
+# Functions for the four phases:
+
 def filling_rhs(t, x):
     x1, x2, x3, x4 = x   # x1=V_CR, x2=Vv, x3=V_CL, x4=flow through L
     dx1 = (-x1 + RR * x4) / (CR * (R2 + RR))
@@ -75,17 +77,13 @@ def filling_rhs(t, x):
           - RR * x1 / (L * (R2 + RR))
     return [dx1, dx2, dx3, dx4]
 
-
 def ejection(t, x):
     x1, x2, x3, x4 = x   # x1=V_CR, x2=Vv, x3=V_CL, x4=flow through L
     dx1 = (-x1 + RR * x4) / (CR * (R2 + RR))
-    dx2 = (-(R1+RL)*E_H(x2,t)*x2-RL*x3-R1*RL*x4) / RT
-    dx3 = (RL * E_H(x2,t)*x2-(RL+Ra)*x3-RL*Ra*x4) / (CL * RT)
-    dx4 = (-RR* x1 / (L*(R2+RR))) + (R1*RL*E_H(x2,t)*x2+RL*Ra*x3-(R1*RL*Ra+RG*RT)*x4) / (L*RT)
+    dx2 = (-(R1+RL)*(E_H(x2,t)*x2)*Fix_factor_ej-RL*x3-R1*RL*x4) / RT
+    dx3 = (RL * (E_H(x2,t)*x2)*Fix_factor_ej-(RL+Ra)*x3-RL*Ra*x4) / (CL * RT)
+    dx4 = (-RR* x1 / (L*(R2+RR))) + (R1*RL*(E_H(x2,t)*x2)*Fix_factor_ej+RL*Ra*x3-(R1*RL*Ra+RG*RT)*x4) / (L*RT)
     return [dx1, dx2, dx3, dx4]
-
-
-
 
 def isovolumic(t, x):
     x1, x2, x3, x4 = x   # x1=V_CR, x2=Vv, x3=V_CL, x4=flow through L
@@ -98,18 +96,14 @@ def isovolumic(t, x):
     return [dx1, dx2, dx3, dx4]
 
 def P_A(x3, dx3):
-    return dx3 * CL *R1
-
-
-
-#P_A_ejection(sol_ejection.y[2,-1], sol_ejection.y[2,-1])
+    return dx3 * CL *R1 +x3
 
 
 def contraction_end_event(t, x):
     x1, x2, x3, x4 = x   # x1=V_CR, x2=Vv, x3=V_CL, x4=flow through L
     dx3 = (-x3-RL*x4) / (CL * (R1 + RL))
-    Pv_active = E_H(x2, t) * x[1]
-    print("Contraction phase: Pv_active =", Pv_active, "P_A =", P_A(x3, dx3), "x3 =", x3)
+    Pv_active = (E_H(x2, t) * x[1]) * Fix_factor_iso
+    print("Contraction phase: Pv_active =", Pv_active, "x1 =", x1, "x2 =", x2, "x3 =", x3, "x4 =", x4)
     # return P_A(x3, dx3) - Pv_active   # nul når Pv netop når PA
     return x3 - Pv_active   # nul når Pv netop når x3
 contraction_end_event.terminal = True
@@ -119,8 +113,8 @@ contraction_end_event.direction = -1 # Because Pv is increasing during contracti
 def ejection_end_event(t, x):
     x1, x2, x3, x4 = x   # x1=V_CR, x2=Vv, x3=V_CL, x4=flow through L
     dx3 = (RL * E_H(x2,t)-(RL+Ra)*x3-RL*Ra*x4) / (CL * RT)
-    Pv_active = E_H(x2, t) * x[1]
-    print("Ejection phase: Pv_active =", Pv_active, "P_A =", P_A(x3, dx3), "x3 =", x3)
+    Pv_active = (E_H(x2, t) * x[1]) * Fix_factor_ej
+    print("Ejection phase: Pv_active =", Pv_active, "x1 =", x1, "x2 =", x2, "x3 =", x3, "x4 =", x4)
     # return P_A(x3, dx3) - Pv_active   # nul når Pv netop når PA
     return x3 - Pv_active   # nul når Pv netop når x3
 ejection_end_event.terminal = True
@@ -129,15 +123,15 @@ ejection_end_event.direction = +1 # Because Pv is decreasing during ejection, we
 def relaxation_end_event(t, x):
     x1, x2, x3, x4 = x   # x1=V_CR, x2=Vv, x3=V_CL, x4=flow through L
     dx3 = (-x3-RL*x4) / (CL * (R1 + RL))
-    Pv_active = E_H(x2, t) * x[1]
-    print("Relaxation phase: Pv_active =", Pv_active, "P_A =", P_A(x3, dx3), "x3 =", x3)
+    Pv_active = (E_H(x2, t) * x[1]) * Fix_factor_iso
+    print("Relaxation phase: Pv_active =", Pv_active, "x1 =", x1, "x2 =", x2, "x3 =", x3, "x4 =", x4)
     return 9.9 - Pv_active   # nul når Pv netop når PA
 relaxation_end_event.terminal = True
 relaxation_end_event.direction = +1 # Because Pv is decreasing during relaxation, we want to detect when there is a zero crossing from negative to positive, which corresponds to the moment when Pv becomes less than 10 mmHg.
 
 
 def filling_end_event(t, x):
-    print("Filling phase: Pv =", Pv(x[1]), "P_AS =", 10)
+    print("Filling phase: Pv_passive =", Pv(x[1]), "x1 =", x[0], "x2 =", x[1], "x3 =", x[2], "x4 =", x[3])
     return 9.9- Pv(x[1])   # nul når Pv netop når PA
 filling_end_event.terminal = True
 filling_end_event.direction = -1 # Because Pv is increasing during filling, we want to detect when there is a zero crossing from positive to negative, which corresponds to the moment when Pv becomes greater than 10 mmHg.
@@ -200,54 +194,6 @@ for i in range(10):
     store(sol_isovolumic, "contraction")
     
 
-"""
-
-x1 = np.concatenate(record_x1)
-x2 = np.concatenate(record_x2)
-x3 = np.concatenate(record_x3)
-x4 = np.concatenate(record_x4)
-
-t_offset = 0.0
-t_segments = []
-for t in record_t:
-    t_segments.append(t + t_offset)
-    t_offset += t[-1]
-time = np.concatenate(t_segments)
-
-plt.figure(figsize=(10, 6))
-plt.subplot(2, 2, 1)
-plt.title("x1: pressure across descending aorta")
-plt.xlabel("Time (s)")
-plt.ylabel("Pressure (mmHg)")
-plt.plot(time, x1, color='#2a78d6')
-plt.grid(True, color='#e1e0d9')
-
-plt.subplot(2, 2, 2)
-plt.title("x2:  ventricular volume")
-plt.xlabel("Time (s)")
-plt.ylabel("Volume (L)")
-plt.plot(time, x2, color='#2a78d6')
-plt.grid(True, color='#e1e0d9')
-
-
-
-
-plt.subplot(2, 2, 3)
-plt.title("x3: pressure across ascending aorta")
-plt.xlabel("Time (s)")
-plt.ylabel("Pressure (mmHg)")
-plt.plot(time, x3, color='#2a78d6')
-plt.grid(True, color='#e1e0d9')
-
-plt.subplot(2, 2, 4)
-plt.title("x4: flow through L")
-plt.xlabel("Time (s)")
-plt.ylabel("Flow (L/s)")
-plt.plot(time, x4, color='#2a78d6')
-plt.grid(True, color='#e1e0d9')
-plt.tight_layout()
-plt.show()4
-"""
 
 PHASE_COLORS = {
     "contraction": "#eb6834",
@@ -271,8 +217,8 @@ for t in record_t:
 
 fig, axs = plt.subplots(2, 2, figsize=(10, 6))
 
-titles  = ["x1: pressure across $C_R$", "x2: ventricular volume",
-           "x3: pressure across $C_L$", "x4: flow through $L$"]
+titles  = ["x1: pressure across $C_R$ (descending & abdominal aorta)", "x2: ventricular volume",
+           "x3: pressure across $C_L$ (ascending aorta)", "x4: flow through $L$"]
 ylabels = ["Pressure (mmHg)", "Volume (L)", "Pressure (mmHg)", "Flow (L/s)"]
 data    = [record_x1, record_x2, record_x3, record_x4]
 
