@@ -1,15 +1,17 @@
 import numpy as np
 from matplotlib import pyplot as plt
 
-fix_factor = 0.1 # could be another number
+# fix_factor = 0.1 # could be another number
+fix_factor = 0.0045 # could be another number
 
-T = 0.100        # maximum time in seconds
+T = 1        # maximum time in seconds
 t_step = 0.1e-3  # integration time step in seconds
 
 h0 = 0.234  # mmHg
 h1 = 147    # mmHg/l
 h2 = 106000 # mmHg/l^2
-Rm = 0.33   # mmHg.s/l
+Rm = 12   # mmHg.s/l
+# Rm = 0.33   # mmHg.s/l
 Pas = 10    # mmHg
 
 N_max = int(T/t_step)
