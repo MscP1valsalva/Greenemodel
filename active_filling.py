@@ -7,8 +7,11 @@ log_file = open("active_filling_log.txt", "w")
 sys.stdout = log_file
 
 # fix_factor = 0.1 # could be another number
-fix_factor_iso = 6 # could be another number
-fix_factor_ejection = 6 # could be another number
+# fix_factor_iso = 6 # could be another number
+# fix_factor_ejection = 6 # could be another number
+
+fix_factor_iso = 1
+fix_factor_ejection = 1
 
 T = 0.5        # maximum time in seconds
 t_step = 0.1e-3  # integration time step in seconds
@@ -26,11 +29,13 @@ x4 = np.zeros(N_max)
 Pv_ejection = np.zeros(N_max)
 Pv_isovolumic = np.zeros(N_max)
 Pv = np.zeros(N_max)
+E = np.zeros(N_max)
 
 # --- Heart-model parameters (eqn 31) ---
 Rm  = 12        # mitral valve resistance, mmHg*s/l
 PAS = 10.0      # atrial source pressure, mmHg
-Ra  = 24       # Changed from 0.60
+Ra = 0.6
+# Ra  = 24       # Changed from 0.60
 # --- Arterial-load parameters (eqn 32) ---
 CL = 2.35e-4    # l/mmHg
 R1 = 60.0       # mmHg*s/l
@@ -41,7 +46,7 @@ Rb = 60.0       # mmHg*s/l
 RR = 8550.0     # mmHg*s/l
 L  = 21.9       # mmHg*s^2/l
 RT = R1* Ra + R1*RL + Ra*RL   # total resistance, mmHg*s/l
-RG = Rb *(1+R2/(RR+R2))   # total resistance, mmHg*s/l
+RG = Rb*((1+R2)/(RR+R2))   # total resistance, mmHg*s/l
 
 # Initial values for ejection phase
 # x1[0] = 60
@@ -50,10 +55,10 @@ RG = Rb *(1+R2/(RR+R2))   # total resistance, mmHg*s/l
 # x4[0] = 0
 
 # Initial values for iso phase (from filling phase)
-x1[0] = 6.098564847343239
-x2[0] = 0.14336558555635703
-x3[0] = 6.0285017400053285
-x4[0] = 0.00027142388621092563
+x1[0] = 33.42402730938285
+x2[0] = 0.143365585556357060
+x3[0] = 33.039866751437
+x4[0] = 0.0014891060914810333
 Pv[0] = 10
 
 def A1(Ved): 
@@ -69,18 +74,21 @@ def A3(Ved):
         return 6.476e-4*Ved**2 - 0.1816*Ved + 10.2
 def B1(Ved): return -1e-4*Ved + 0.0157
 def B2(Ved): return 45.0
+# def B2(Ved): return 5
 def B3(Ved): return -4e-4*Ved + 0.0431
 def C1(Ved): return 9.7e-6*Ved**2 - 2.8e-4*Ved + 0.12
 def C2(Ved): return 0.06
+# def C2(Ved): return 0.25
 def C3(Ved): return -40.2e-6*Ved**2 + 4.78e-3*Ved + 0.06
 D = 0
-scale = 1   # empirical correction to Ai(Ved) amplitudes to reach physiological pressures
+scale = 50   # empirical correction to Ai(Ved) amplitudes to reach physiological pressures
 
 def E_H(Ved, t):
     s = 0.0
     for A, B, C in [(scale*A1(Ved),B1(Ved),C1(Ved)), (scale*A2(Ved),B2(Ved),C2(Ved)), (scale*A3(Ved),B3(Ved),C3(Ved))]:
-        s += A * np.exp(-((B*0.7)**2) * (t/2 - C)**2)
+        s += A * np.exp(-((B*0.5)**2) * (t - C*4)**2)
     return s + D
+
 
 def Pv_iso(Ved, t):
     return (E_H(Ved, t) * Ved) * fix_factor_iso
@@ -120,6 +128,7 @@ for i in range(1,N_max):
               + RL * x3[i-1] / (L * (R1 + RL)) \
               - RR * x1[i-1] / (L * (R2 + RR)))
         Pv[i] = Pv_iso(x2[i], t[i])
+        E[i] = E_H(x2[i],t[i])
         print("Pv: ", Pv[i], "Phase: ", phase[i])
     elif Pv[i-1] >= 80:
         phase[i] = "ejection"
@@ -128,6 +137,7 @@ for i in range(1,N_max):
         x3[i] = x3[i-1] + t_step * ((RL * E_H(x2[i-1],t[i])*x2[i-1]-(RL+Ra)*x3[i-1]-RL*Ra*x4[i-1]) / (CL * RT))
         x4[i] = x4[i-1] + t_step * ((-RR* x1[i-1] / (L*(R2+RR))) + (R1*RL*E_H(x2[i-1],t[i])*x2[i-1]+RL*Ra*x3[i-1]-(R1*RL*Ra+RG*RT)*x4[i-1]) / (L*RT))
         Pv[i] = Pv_ej(x2[i], t[i])
+        E[i] = E_H(x2[i],t[i])
         print("Pv: ", Pv[i], "Phase: ", phase[i])
 
 fig, (ax_pv, ax_volume) = plt.subplots(2, 1)
@@ -136,14 +146,15 @@ ax_pv.set_xlabel('time (s)')
 ax_pv.set_ylabel('Pv (mmHg)')
 ax_pv.set_title('Pv active curve')
 ax_pv.grid()
-ax_volume.plot(t, x2)
+ax_volume.plot(t, E)
 ax_volume.set_xlabel('time')
-ax_volume.set_ylabel('Vv')
+ax_volume.set_ylabel('Elastance')
+ax_volume.grid()
 
-phase_changes = np.flatnonzero(phase[1:] != phase[:-1]) + 1
-for index in phase_changes:
-    ax_pv.axvline(t[index], color='black', linestyle='--', linewidth=1)
-    ax_volume.axvline(t[index], color='black', linestyle='--', linewidth=1)
+# phase_changes = np.flatnonzero(phase[1:] != phase[:-1]) + 1
+# for index in phase_changes:
+#     ax_pv.axvline(t[index], color='black', linestyle='--', linewidth=1)
+#     ax_volume.axvline(t[index], color='black', linestyle='--', linewidth=1)
 
 
 plt.tight_layout()
