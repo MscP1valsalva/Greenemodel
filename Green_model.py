@@ -16,16 +16,16 @@ PAS = 10.0      # atrial source pressure, mmHg
 Ra = 0.6
 # Ra  = 24 # Changed from 0.60
 Fix_factor_passive = 0.0045    
-# Fix_factor_ej = 6 # Subject to change
+# Fix_factor_ej = 3 # Subject to change
 # Fix_factor_iso = 3 # Subject to change
-Fix_factor_ej = 1
-Fix_factor_iso = 1
+Fix_factor_ej = 0.15
+Fix_factor_iso = 0.15
 # --- Arterial-load parameters (eqn 32) ---
 CL = 2.35e-4    # l/mmHg
-R1 = 60.0       # mmHg*s/l
+R1 = 60*10       # mmHg*s/l
 CR = 1.33e-4    # l/mmHg
 R2 = 300.0      # mmHg*s/l
-RL = 12640.0    # mmHg*s/l
+RL = 22640.0    # mmHg*s/l
 Rb = 60.0       # mmHg*s/l
 RR = 8550.0     # mmHg*s/l
 L  = 21.9       # mmHg*s^2/l
@@ -65,12 +65,12 @@ def C1(Ved): return 9.7e-6*Ved**2 - 2.8e-4*Ved + 0.12
 def C2(Ved): return 0.06 # Original
 # def C2(Ved): return 0.35 # Altered
 def C3(Ved): return -40.2e-6*Ved**2 + 4.78e-3*Ved + 0.06
-D = 50
-scale = 1  # empirical correction to Ai(Ved) amplitudes to reach physiological pressures
+D = -600
+scale = 46  # empirical correction to Ai(Ved) amplitudes to reach physiological pressures
 def E_H(Ved, t):
     s = 0.0
     for A, B, C in [(scale*A1(Ved),B1(Ved),C1(Ved)), (scale*A2(Ved),B2(Ved),C2(Ved)), (scale*A3(Ved),B3(Ved),C3(Ved))]:
-        s += A * np.exp(-((B)**2) * (t - C)**2)
+        s += A * np.exp(-((B*0.2)**2) * (t - C*4)**2)
     return s + D
 
 # Functions for the four phases:
