@@ -60,6 +60,42 @@ def ecg_processing(signal, fs):
     return filtered_signal
 
 
+def systolic_blood_peaks(signal, fs):
+    """
+        signal: Blood pressure signal (numpy array) \n
+        fs : sampling frequency of the recording [Hz] (float) \n
+
+        This function detects the systolic blood pressure peaks in the given signal.
+        Returns: \n
+        peaks : indices of the detected peaks \n
+        rr : time between beats [s], without the gaps from Finapres calibrations
+    """
+    from scipy.signal import find_peaks
+    import numpy as np
+
+    # Size of the pulse in the last few seconds (it changes a lot during a recording)
+    s = pd.Series(signal)
+    n = int(4 * fs)
+    local_pulse = (s.rolling(n, center=True, min_periods=1).max()
+                   - s.rolling(n, center=True, min_periods=1).min()).to_numpy()
+
+    # Find all peaks at least 0.4 s apart (max 150 bpm)
+    peaks, props = find_peaks(signal, distance=int(0.4 * fs), prominence=0)
+
+    # Keep peaks that stand out by 30 % of the local pulse (ignores the dicrotic notch)
+    keep = props["prominences"] >= 0.3 * local_pulse[peaks]
+    peaks = peaks[keep]
+
+    # Time between beats. During a calibration the Finapres shows no beats, so
+    # the interval across it is far too long. Drop intervals that are more than
+    # 1.5x the typical interval of the beats around it
+    rr = np.diff(peaks) / fs
+    typical = pd.Series(rr).rolling(9, center=True, min_periods=1).median().to_numpy()
+    rr = rr[rr < 1.5 * typical]
+
+    return peaks, rr
+
+
 """
 Run the file: choose a subject in the terminal and it gets plotted
 """
@@ -70,7 +106,6 @@ if __name__ == "__main__":
     files = sorted(DATA_DIR.glob("*_Export.xls"))
     adc_finapres = 100 # mmHg/V
     V_mV_conversion = 1000 # mV/V
-    offset = 0.0 # Offset finapress
 
     while True:
         # Show the subjects with a number 
@@ -90,9 +125,15 @@ if __name__ == "__main__":
         name = file.stem
         df = load_data(file.name, fs)
         t = df["Time"].to_numpy()
+
+
         ecg_lead_1 = df["ECG I"].to_numpy() * V_mV_conversion
         ecg_lead_2 = df["ECG II"].to_numpy() * V_mV_conversion
-        bp= (df["Sys BP"].to_numpy() * adc_finapres) + offset
+
+
+        bp = (df["Sys BP"].to_numpy() * adc_finapres) 
+        bp_peaks, rr = systolic_blood_peaks(bp, fs)
+        heart_rate = 60 / rr   # bpm for each beat
 
         # Process the ECG signal
         ecg_lead_1_processed = -ecg_processing(ecg_lead_1, fs)
@@ -107,6 +148,7 @@ if __name__ == "__main__":
         ax2.plot(t, ecg_lead_2_processed, linewidth = linewidth)
         ax2.set_ylabel("ECG Lead II (mV)")
         ax3.plot(t, bp, linewidth = linewidth)
+        ax3.plot(t[bp_peaks], bp[bp_peaks], "x", label="Systolic Peaks")
         ax3.set_ylabel("Blood Pressure (mmHg)")
         ax3.set_xlabel("Time [s]")
 
