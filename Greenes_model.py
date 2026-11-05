@@ -13,15 +13,15 @@ sys.stdout = log_file
 # --- Heart-model parameters (eqn 31) ---
 Rm  = 12      # mitral valve resistance, mmHg*s/l (altered from 0.33 to 12 to match the correct physiological range)
 PAS = 10.0      # atrial source pressure, mmHg
-Ra = 0.6
+Ra = 0.6 
 Fix_factor_passive = 0.0045    
 
 # --- Arterial-load parameters (eqn 32) ---
-CL = 2.35e-4 *0.1  # l/mmHg
-R1 = 60*12       # mmHg*s/l
-CR = 1.33e-4    # l/mmHg
+CL = 2.35e-4 *0.1  # l/mmHg 
+R1 = 60*12       # mmHg*s/l *12
+CR = 1.33e-4   # l/mmHg
 R2 = 300.0 *2.4     # mmHg*s/l
-RL = 12640.0 *2.5    # mmHg*s/l
+RL = 12640.0 *2.5    # mmHg*s/l 
 Rb = 60.0       # mmHg*s/l
 RR = 8550.0 *3    # mmHg*s/l
 L  = 21.9      # mmHg*s^2/l
@@ -171,7 +171,7 @@ t_span = (0, 1)   # A maximal cutoff for every phase (this should never be reach
 max_step = 1e-3   # The resolution of datapoints
 cycle_offset = 0
 
-for i in range(20): # Number of heart cycles
+for i in range(10): # Number of heart cycles
     print(f"Cycle {i+1}")
 
     # Ejection phase
