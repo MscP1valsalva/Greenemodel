@@ -165,7 +165,7 @@ t_span = (0, 1)   # A maximal cutoff for every phase (this should never be reach
 max_step = 1e-3   # The resolution of datapoints
 cycle_offset = 0
 
-for i in range(20): # Number of heart cycles
+for i in range(180): # Number of heart cycles
 
     # Ejection phase
     if i == 0:

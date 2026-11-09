@@ -15,6 +15,7 @@ Functions in this file:
     load_all_subjects     - load every measurement file in DataFolder
     ecg_processing        - filter an ECG signal with a butterworth filter
     systolic_blood_peaks  - find the heartbeats (systolic peaks) in a blood pressure curve
+    mean_artial_pressure  - the mean arterial pressure (MAP) of each heartbeat
     choose_subject        - let you choose a measurement file in the terminal
 
 Run this file directly to choose a subject and plot its ECG and blood pressure.
@@ -187,6 +188,63 @@ def systolic_blood_peaks(signal, fs):
     return peaks, rr
 
 
+def mean_artial_pressure(signal, peaks):
+    """
+        signal : blood pressure signal (numpy array) \n
+        peaks : sample numbers of the systolic peaks, from systolic_blood_peaks \n
+
+        Calculates the mean arterial pressure (MAP) of each heartbeat: the
+        average of all the samples between one systolic peak and the next.
+
+        One heartbeat goes from one systolic peak to the next, so the samples
+        between them cover exactly one whole beat: the high pressure at the
+        peak, the fall, the dicrotic notch and the low pressure before the next
+        beat. Their average is the mean pressure during that beat.
+
+        Returns: \n
+        map_beat : MAP of each beat [mmHg] \n
+        beat_end : sample number where each beat ends (the next peak).
+                   Use t[beat_end] to get the time of each MAP value.
+
+        Beats that span a Finapres calibration are skipped, with the same rule as
+        in systolic_blood_peaks (longer than 1.5x the typical beat around it).
+        Because of that, map_beat can be shorter than peaks.
+    """
+    # --- Step 1: length of each beat ---
+    # np.diff gives the number of samples between each pair of neighbouring peaks.
+    # Example: peaks = [100, 240, 380]  ->  rr = [140, 140]
+    rr = np.diff(peaks)
+
+    # --- Step 2: find the beats that span a calibration ---
+    # During a calibration the curve goes flat and no beats are visible, so the
+    # "beat" across it is much too long and its average would be meaningless.
+    # Same rule as in systolic_blood_peaks: compare each beat with the typical
+    # length of the 9 beats around it (the median), and only keep the beats
+    # that are shorter than 1.5 times that.
+    # normal_beat is a True/False array: True = normal beat, False = calibration
+    typical = pd.Series(rr).rolling(9, center=True, min_periods=1).median().to_numpy()
+    normal_beat = rr < 1.5 * typical
+
+    # --- Step 3: start and end sample of every normal beat ---
+    # peaks[:-1] is every peak except the last  -> the start of each beat
+    # peaks[1:]  is every peak except the first -> the end of each beat (the next peak)
+    # Example: peaks = [100, 240, 380]  ->  start = [100, 240], end = [240, 380]
+    # [normal_beat] then keeps only the beats where normal_beat is True
+    beat_start = peaks[:-1][normal_beat]
+    beat_end = peaks[1:][normal_beat]
+
+    # --- Step 4: the average of each beat ---
+    # zip pairs the starts and ends: (100, 240), (240, 380), ...
+    # signal[start:end] is the piece of the curve from this peak up to (not
+    # including) the next peak, and .mean() is the average of those samples
+    map_beat = []
+    for start, end in zip(beat_start, beat_end):
+        map_beat.append(signal[start:end].mean())
+
+    # Turn the list into a numpy array, so you can calculate with it
+    return np.array(map_beat), beat_end
+
+
 def choose_subject():
     """
         Shows the measurement files in DataFolder with a number and asks you to
@@ -259,6 +317,7 @@ if __name__ == "__main__":
         bp = df["Sys BP"].to_numpy() * adc_finapres               # [V] -> [mmHg]
         bp_peaks, rr = systolic_blood_peaks(bp, fs)
         heart_rate = 60 / rr       # heart rate for each beat [bpm] (60 s / time per beat)
+        map_beat, beat_end = mean_artial_pressure(bp, bp_peaks)
 
         # --- Filter the ECG signals ---
         # Lead I is multiplied by -1 (flipped upside down) so its R-peaks point up
@@ -279,6 +338,7 @@ if __name__ == "__main__":
 
         ax3.plot(t, bp, linewidth=linewidth)
         ax3.plot(t[bp_peaks], bp[bp_peaks], "x", label="Systolic Peaks")   # an x on each peak
+        ax3.plot(t[beat_end], map_beat, label = "MAP")
         ax3.set_ylabel("Blood Pressure (mmHg)")
         ax3.set_xlabel("Time [s]")
 

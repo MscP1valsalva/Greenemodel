@@ -22,7 +22,7 @@ import pandas as pd
 from matplotlib import pyplot as plt
 
 from load_model import run_greene_model, sample
-from preprocessing import load_data, systolic_blood_peaks, choose_subject
+from preprocessing import load_data, systolic_blood_peaks, choose_subject, mean_artial_pressure
 
 
 def valid_samples(bp_peaks, n):
@@ -145,30 +145,73 @@ if __name__ == "__main__":
         n = min(len(bp), len(pa_model))
         bp_cut = bp[:n]
         pa_cut = pa_model[:n]
-        bp_peaks_cut = bp_peaks[bp_peaks < n]                # only the peaks inside the cut part
+        t = np.arange(n) / fs                                # time axis of the cut part [s]
 
-        # --- Compare ---
+        # Find the peaks again on the cut signals, so every beat lies inside the
+        # cut part. Then t[...] can never point past the end of t
+        bp_peaks_cut, _ = systolic_blood_peaks(bp_cut, fs)
+        model_peaks_cut, _ = systolic_blood_peaks(pa_cut, fs)
+
+        # --- Compare the blood pressure curves ---
         valid = valid_samples(bp_peaks_cut, n)
         r, rmse = compare(bp_cut, pa_cut, valid)
 
         # valid.mean() is the fraction of True values, so x100 gives the percentage used
         print(f"Pearson r = {r:.3f}, RMSE = {rmse:.1f} mmHg ({100 * valid.mean():.0f} % of samples used)")
 
-        # --- Plot ---
-        t = np.arange(n) / fs                                # time axis [s]
+        # --- MAP of the cut signals ---
+        # One MAP value per beat, and the sample where each beat ends
+        map_measurement, measurement_end_peak = mean_artial_pressure(bp_cut, bp_peaks_cut)
+        map_model, model_end_peak = mean_artial_pressure(pa_cut, model_peaks_cut)
 
-        plt.figure()
-        plt.suptitle(name)
+        # --- Put both MAP series on the same time axis ---
+        # The model and the measurement have a different number of beats, at
+        # different times, so their MAP lists can't be paired value by value.
+        # np.interp draws a straight line between the MAP values of neighbouring
+        # beats and reads off the value at every time in t. Then both have one
+        # MAP value per sample, and sample k of both belongs to the same time
+        map_measurement_t = np.interp(t, t[measurement_end_peak], map_measurement)
+        map_model_t = np.interp(t, t[model_end_peak], map_model)
+
+        # --- Compare MAP ---
+        # Same function and the same valid samples as for the blood pressure curves
+        r_map, rmse_map = compare(map_measurement_t, map_model_t, valid)
+        print(f"MAP: Pearson r = {r_map:.3f}, RMSE = {rmse_map:.1f} mmHg")
+
+        # --- Plot: two plots above each other with a shared time axis ---
+        # Top (ax1): the blood pressure curves, to see the shape of the beats.
+        # Bottom (ax2): the MAP with its own y-axis, so its slow changes are
+        # visible (in the top plot they would look flat next to the big pulses).
+        # sharex=True: zooming in one plot zooms in both
+        # figsize = (width, height) of the window in inches
+        fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(12, 7))
+        fig.suptitle(name)
         linewidth = 0.5
-        plt.plot(t, bp_cut, linewidth=linewidth, label="Measurement")
-        plt.plot(t, pa_cut, linewidth=linewidth, label="Model")
 
-        # Grey areas where valid is False (~ means "not"): the samples left out
-        plt.fill_between(t, bp_cut.min(), bp_cut.max(), where=~valid, color="grey", alpha=0.3, label="Not used")
+        ax1.plot(t, bp_cut, linewidth=linewidth, label="Measurement")
+        ax1.plot(t, pa_cut, linewidth=linewidth, label="Model")
+        ax1.set_ylabel("Pressure [mmHg]")
+        ax1.set_title("Blood pressure")
 
-        plt.xlabel("Time [s]")
-        plt.ylabel("Pressure [mmHg]")
-        plt.legend()
+        ax2.plot(t, map_measurement_t, label="MAP - Measurement",linewidth=linewidth)
+        ax2.plot(t, map_model_t, label="MAP - Model", linewidth=linewidth)
+        ax2.set_ylabel("MAP [mmHg]")
+        ax2.set_xlabel("Time [s]")
+        ax2.set_title("Mean arterial pressure")
+
+        # Grey areas where valid is False (~ means "not"): the samples left out.
+        # transform=get_xaxis_transform() makes the grey area go from the bottom
+        # (0) to the top (1) of each plot, whatever the y-values are
+        for ax in (ax1, ax2):
+            ax.fill_between(t, 0, 1, where=~valid, color="grey", alpha=0.3,
+                            transform=ax.get_xaxis_transform(), label="Not used")
+
+            # Put the legend just to the right of the plot, so it doesn't cover
+            # the curves. (1.01, 0.5) = just past the right edge, halfway up
+            ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5))
+
+        # Make the two plots and their titles not overlap
+        fig.tight_layout()
 
         # plt.show() waits here until you close the figure window,
         # then the loop starts again and you can choose a new subject
