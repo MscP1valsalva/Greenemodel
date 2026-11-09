@@ -14,8 +14,10 @@ Functions in this file:
     load_data             - load one measurement file
     load_all_subjects     - load every measurement file in DataFolder
     ecg_processing        - filter an ECG signal with a butterworth filter
+    normal_beats          - which beat intervals are normal, and which span a Finapres calibration
     systolic_blood_peaks  - find the heartbeats (systolic peaks) in a blood pressure curve
     mean_artial_pressure  - the mean arterial pressure (MAP) of each heartbeat
+    beat_averge           - moving average over a number of beats (e.g. 5), to smooth heart rate or MAP
     choose_subject        - let you choose a measurement file in the terminal
 
 Run this file directly to choose a subject and plot its ECG and blood pressure.
@@ -131,6 +133,43 @@ def ecg_processing(signal, fs):
     return filtered_signal
 
 
+def normal_beats(peaks):
+    """
+        peaks : sample numbers of the systolic peaks (numpy array) \n
+
+        Finds out which beat intervals are normal heartbeats and which ones span
+        a Finapres calibration.
+
+        The Finapres calibrates itself every so often. Then the curve goes flat
+        for a few seconds and no beats are visible, so the interval between the
+        peak before and the peak after is far too long to be one heartbeat.
+
+        Rule: compare each interval with the typical interval of the 9 intervals
+        around it (the median, which is not thrown off by one odd value). An
+        interval that is more than 1.5 times as long spans a calibration.
+
+        Example:
+            intervals = 1.45  1.52  1.43  1.34  [4.27]  1.40  1.39  1.38  1.37
+            typical for [4.27] = 1.40, limit = 1.5 x 1.40 = 2.10
+            4.27 > 2.10, so [4.27] spans a calibration -> False
+
+        This rule is used by systolic_blood_peaks, mean_artial_pressure and
+        valid_samples (in model_validation.py), so change 9 and 1.5 only here.
+
+        Returns a True/False array with one value per interval (one shorter
+        than peaks): True = normal beat, False = spans a calibration.
+    """
+    # Number of samples between each pair of neighbouring peaks
+    rr = np.diff(peaks)
+
+    # Typical interval around each beat: the median of a window of 9 intervals.
+    # center=True: 4 before, the interval itself and 4 after.
+    # min_periods=1: also works at the start and end, where the window is smaller
+    typical = pd.Series(rr).rolling(9, center=True, min_periods=1).median().to_numpy()
+
+    return rr < 1.5 * typical
+
+
 def systolic_blood_peaks(signal, fs):
     """
         signal : blood pressure signal (numpy array) \n
@@ -174,16 +213,9 @@ def systolic_blood_peaks(signal, fs):
     # --- Step 4: time between beats ---
     # np.diff gives the number of samples between each pair of neighbouring
     # peaks. Dividing by fs turns it into seconds.
-    rr = np.diff(peaks) / fs
-
-    # The Finapres calibrates itself every so often. Then the curve goes flat for
-    # a few seconds and no beats are visible, so the interval across it is far
-    # too long to be one heartbeat.
-    # Compare each interval with the typical interval of the 9 intervals around
-    # it (the median, which is not thrown off by one odd value), and drop the
-    # intervals that are more than 1.5 times as long.
-    typical = pd.Series(rr).rolling(9, center=True, min_periods=1).median().to_numpy()
-    rr = rr[rr < 1.5 * typical]
+    # [normal_beats(peaks)] then drops the intervals that span a Finapres
+    # calibration (see normal_beats), because they are not one real heartbeat
+    rr = (np.diff(peaks) / fs)[normal_beats(peaks)]
 
     return peaks, rr
 
@@ -210,22 +242,14 @@ def mean_artial_pressure(signal, peaks):
         in systolic_blood_peaks (longer than 1.5x the typical beat around it).
         Because of that, map_beat can be shorter than peaks.
     """
-    # --- Step 1: length of each beat ---
-    # np.diff gives the number of samples between each pair of neighbouring peaks.
-    # Example: peaks = [100, 240, 380]  ->  rr = [140, 140]
-    rr = np.diff(peaks)
-
-    # --- Step 2: find the beats that span a calibration ---
+    # --- Step 1: find the beats that span a calibration ---
     # During a calibration the curve goes flat and no beats are visible, so the
     # "beat" across it is much too long and its average would be meaningless.
-    # Same rule as in systolic_blood_peaks: compare each beat with the typical
-    # length of the 9 beats around it (the median), and only keep the beats
-    # that are shorter than 1.5 times that.
-    # normal_beat is a True/False array: True = normal beat, False = calibration
-    typical = pd.Series(rr).rolling(9, center=True, min_periods=1).median().to_numpy()
-    normal_beat = rr < 1.5 * typical
+    # normal_beat is a True/False array (see normal_beats):
+    # True = normal beat, False = spans a calibration
+    normal_beat = normal_beats(peaks)
 
-    # --- Step 3: start and end sample of every normal beat ---
+    # --- Step 2: start and end sample of every normal beat ---
     # peaks[:-1] is every peak except the last  -> the start of each beat
     # peaks[1:]  is every peak except the first -> the end of each beat (the next peak)
     # Example: peaks = [100, 240, 380]  ->  start = [100, 240], end = [240, 380]
@@ -233,7 +257,7 @@ def mean_artial_pressure(signal, peaks):
     beat_start = peaks[:-1][normal_beat]
     beat_end = peaks[1:][normal_beat]
 
-    # --- Step 4: the average of each beat ---
+    # --- Step 3: the average of each beat ---
     # zip pairs the starts and ends: (100, 240), (240, 380), ...
     # signal[start:end] is the piece of the curve from this peak up to (not
     # including) the next peak, and .mean() is the average of those samples
@@ -243,6 +267,38 @@ def mean_artial_pressure(signal, peaks):
 
     # Turn the list into a numpy array, so you can calculate with it
     return np.array(map_beat), beat_end
+
+
+def beat_averge(window_samples, beats):
+    """
+        window_samples : number of beats in the window, e.g. 5 (int) \n
+        beats : one value per heartbeat, e.g. heart rate or MAP (numpy array) \n
+
+        Smooths a per-beat signal with a moving average: each value is replaced
+        by the average of the beats around it. With window_samples = 5 that is
+        the beat itself, the 2 beats before it and the 2 beats after it.
+
+        This removes the small beat-to-beat jumps, so slower changes (like the
+        ones during a Valsalva manoeuvre) are easier to see.
+
+        At the start and end there are fewer than 2 neighbours on one side, so
+        the average is taken over the beats that are there.
+
+        Example with window_samples = 5:
+            beats  = [80,   82,   90,   84,   86,   88,   81]
+            result = [84.0, 84.0, 84.4, 86.0, 85.8, 84.8, 85.0]
+            e.g. 86.0 is the mean of 82, 90, 84, 86, 88
+
+        Returns the smoothed values, with the same length as beats.
+    """
+    # pd.Series so we can use .rolling()
+    # rolling(window_samples, center=True): a window of window_samples beats,
+    #     centred on the current beat
+    # min_periods=1: also give a value at the start and end, where the window
+    #     has fewer beats
+    # .mean(): the average of the beats in each window
+    # .to_numpy(): back to a numpy array
+    return pd.Series(beats).rolling(window_samples, center=True, min_periods=1).mean().to_numpy()
 
 
 def choose_subject():
@@ -316,8 +372,16 @@ if __name__ == "__main__":
         # --- Blood pressure ---
         bp = df["Sys BP"].to_numpy() * adc_finapres               # [V] -> [mmHg]
         bp_peaks, rr = systolic_blood_peaks(bp, fs)
-        heart_rate = 60 / rr       # heart rate for each beat [bpm] (60 s / time per beat)
+        heart_rate = np.array(60 / rr)       # heart rate for each beat [bpm] (60 s / time per beat)
         map_beat, beat_end = mean_artial_pressure(bp, bp_peaks)
+
+        # Heart rate and MAP skip exactly the same calibration beats (same 1.5x
+        # rule), so value k of both belongs to the same beat, and t[beat_end]
+        # is the time of each value for both
+
+        # --- Smooth heart rate and MAP: average over 5 beats ---
+        heart_rate_smooth = beat_averge(3, heart_rate)
+        map_smooth = beat_averge(3, map_beat)
 
         # --- Filter the ECG signals ---
         # Lead I is multiplied by -1 (flipped upside down) so its R-peaks point up
@@ -326,22 +390,23 @@ if __name__ == "__main__":
 
         # --- Plot: three plots above each other with a shared time axis ---
         # sharex=True: zooming in one plot zooms in all three
-        linewidth = 0.2
-        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, sharex=True)
-        fig.suptitle(name)
+        linewidth = 0.5
+        fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True)
+        fig.suptitle(name.rsplit(".", 1)[0])
 
-        ax1.plot(t, ecg_lead_1_processed, linewidth=linewidth)
-        ax1.set_ylabel("ECG Lead I (mV)")
+        ax1.plot(t, bp, linewidth=linewidth, label = "Blood Pressure")
+        ax1.plot(t[bp_peaks], bp[bp_peaks], "x")
+        ax1.set_ylabel("Blood Pressure (mmHg)")
+        ax1.plot(t[beat_end], map_smooth, label = "Mean Arterial Pressure", linewidth = 1.5)        
 
-        ax2.plot(t, ecg_lead_2_processed, linewidth=linewidth)
-        ax2.set_ylabel("ECG Lead II (mV)")
+        ax2.plot(t[beat_end], heart_rate_smooth, label = "Heart Rate", linewidth = linewidth)
+        ax2.set_ylabel("Heart rate (bpm)")
+        ax2.set_xlabel("Time [s]")
+        ax2.set_ylim(30, 200)
+        
 
-        ax3.plot(t, bp, linewidth=linewidth)
-        ax3.plot(t[bp_peaks], bp[bp_peaks], "x", label="Systolic Peaks")   # an x on each peak
-        ax3.plot(t[beat_end], map_beat, label = "MAP")
-        ax3.set_ylabel("Blood Pressure (mmHg)")
-        ax3.set_xlabel("Time [s]")
-
+        ax1.legend(loc="upper right")
+        ax2.legend(loc="upper right")
         # plt.show() waits here until you close the figure window,
         # then the loop starts again and you can choose a new subject
         plt.show()
