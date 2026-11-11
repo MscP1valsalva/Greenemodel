@@ -213,10 +213,34 @@ def compare_all_subjects(pa_model, fs, adc_finapres):
     return table, curves
 
 
-def plot_subject(name, c):
+# Time [s] where the strain (the Valsalva manoeuvre) starts
+VM_START = 58.4
+
+# Typical length of each phase [s] for a 15 s strain (I + II = the strain)
+PHASE_DURATIONS = {"I": 3, "II": 13, "III": 3, "IV": 10}
+
+
+def valsalva_phases(start, durations=PHASE_DURATIONS):
+    """
+        start : time [s] where the strain starts \n
+        durations : length [s] of each phase, in order \n
+
+        Returns a list of (name, start [s], end [s]), one per phase.
+        Each phase starts where the one before it ended.
+    """
+    phases = []
+    t = start
+    for name, duration in durations.items():
+        phases.append((name, t, t + duration))
+        t += duration
+    return phases
+
+
+def plot_subject(name, c, vm_start=VM_START):
     """
         name : subject name, used as the title (string) \n
         c : the curves of this subject, e.g. curves["subj 2.1"] from compare_all_subjects \n
+        vm_start : time [s] where the strain starts, used to draw the Valsalva phases \n
 
         Two plots above each other with a shared time axis:
         Top: the blood pressure curves, to see the shape of the beats.
@@ -226,37 +250,51 @@ def plot_subject(name, c):
     """
     # sharex=True: zooming in one plot zooms in both
     # figsize = (width, height) of the window in inches
-    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(12, 7))
-    fig.suptitle(name)
+    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True)
+    #fig.suptitle(name)
     linewidth = 0.5
+    ax1.set_xlim((50, 100))
+    phases = valsalva_phases(vm_start)
 
     ax1.plot(c["t"], c["bp"], linewidth=linewidth, label="Measurement")
     ax1.plot(c["t"], c["pa"], linewidth=linewidth, label="Model")
-    ax1.set_ylabel("Pressure [mmHg]")
-    ax1.set_title("Blood pressure")
+    ax1.set_ylabel("Blood pressure [mmHg]")
+    ax1.set_title("(a)")
 
-    ax2.plot(c["t"], c["map_measurement"], linewidth=linewidth, label="MAP - Measurement")
-    ax2.plot(c["t"], c["map_model"], linewidth=linewidth, label="MAP - Model")
+    ax2.plot(c["t"], c["map_measurement"], linewidth=linewidth, label="Measurement")
+    ax2.plot(c["t"], c["map_model"], linewidth=linewidth, label="Model")
     ax2.set_ylabel("MAP [mmHg]")
     ax2.set_xlabel("Time [s]")
-    ax2.set_title("Mean arterial pressure")
+    ax2.set_title("(b)")
 
     for ax in (ax1, ax2):
         # Grey areas where valid is False (~ means "not"): the samples left out.
         # transform=get_xaxis_transform() makes the grey area go from the bottom
         # (0) to the top (1) of each plot, whatever the y-values are
         ax.fill_between(c["t"], 0, 1, where=~c["valid"], color="grey", alpha=0.3,
-                        transform=ax.get_xaxis_transform(), label="Not used")
+                        transform=ax.get_xaxis_transform(), label="Calibration")
+
+        # One lightly coloured band per Valsalva phase, full height of the plot
+        for i, (label, start, end) in enumerate(phases):
+            ax.axvspan(start, end, color=f"C{i + 2}", alpha=0.15, linewidth=0)
 
         # Put the legend just to the right of the plot, so it doesn't cover
         # the curves. (1.01, 0.5) = just past the right edge, halfway up
-        ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5))
+        ax.legend(loc="upper right", fontsize = 8)
+
+    # Write I, II, III, IV centred in each band, near the top of plot (a).
+    # get_xaxis_transform(): x in seconds, y from 0 (bottom) to 1 (top)
+    for label, start, end in phases:
+        ax1.text((start + end) / 2, 0.97, label, transform=ax1.get_xaxis_transform(),
+                 ha="center", va="top", fontsize=9, fontweight="bold")
 
     # Make the two plots and their titles not overlap
     fig.tight_layout()
 
     # plt.show() waits here until you close the figure window
+    fig.savefig("VM_Model_messure.png", dpi=300)
     plt.show()
+    
 
 
 """
