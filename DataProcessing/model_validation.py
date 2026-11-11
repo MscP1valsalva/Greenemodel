@@ -231,7 +231,7 @@ def plot_subject(name, c):
     linewidth = 0.5
 
     ax1.plot(c["t"], c["bp"], linewidth=linewidth, label="Measurement")
-    #ax1.plot(c["t"], c["pa"], linewidth=linewidth, label="Model")
+    ax1.plot(c["t"], c["pa"], linewidth=linewidth, label="Model")
     ax1.set_ylabel("Pressure [mmHg]")
     ax1.set_title("Blood pressure")
 
