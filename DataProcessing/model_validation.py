@@ -16,6 +16,7 @@ Functions in this file:
     map_curve     - the MAP of each beat, as a curve with one value per sample
     compare_all_subjects - runs the comparison for every subject, so you can get the mean and standard deviation.
                            Also keeps the curves of every subject for plotting
+    per_subject   - groups the measurements of each person (subj 2.1 ... 2.4 -> subj 2)
     plot_subject  - plots the blood pressure and MAP of one subject against the model
 
 Run this file directly to compare the model with all subjects, and then choose
@@ -213,6 +214,24 @@ def compare_all_subjects(pa_model, fs, adc_finapres):
     return table, curves
 
 
+def per_subject(table):
+    """
+        table : the table from compare_all_subjects, one row per measurement \n
+
+        Groups the measurements of each person: "subj 2.1" ... "subj 2.4" all
+        belong to "subj 2".
+
+        Returns: \n
+        mean : one row per person, the mean of their measurements \n
+        std : one row per person, the standard deviation of their measurements
+              (how much the same person varies from measurement to measurement)
+    """
+    # Cut the name at the last dot: "subj 2.1" -> "subj 2"
+    person = table.index.str.rsplit(".", n=1).str[0]
+    groups = table.groupby(person)
+    return groups.mean(), groups.std()
+
+
 # Time [s] where the strain (the Valsalva manoeuvre) starts
 VM_START = 58.4
 
@@ -329,6 +348,18 @@ if __name__ == "__main__":
     # pandas std() is the sample standard deviation (divides by N - 1)
     print("\nOver all subjects:")
     print(table.agg(["mean", "std"]).round(2))
+
+    # --- One line per person, from their four measurements ---
+    subject_mean, subject_std = per_subject(table)
+
+    # Show each value as "mean ± std" of that person's measurements
+    print("\nPer subject (mean ± std of the measurements of each person):")
+    print(subject_mean.round(2).astype(str) + " ± " + subject_std.round(2).astype(str))
+
+    # Between subjects: every person counts once (their mean), so a person with
+    # many measurements doesn't weigh more. std = how much the persons differ
+    print("\nBetween subjects (mean and std of the per-subject means):")
+    print(subject_mean.agg(["mean", "std"]).round(2))
 
     while True:
         # Let the user choose a measurement file. None means they typed q
