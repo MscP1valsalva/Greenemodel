@@ -210,20 +210,6 @@ RT = R1* Ra + R1*RL + Ra*RL   # total resistance, mmHg*s/l
 # Coefficients of Greene's passive pressure-volume curve, [G] eqn 30
 h0, h1, h2 = 0.234, 147.0, 106000.0
 
-def E_p(Vv):
-    """
-        Vv : ventricle volume [l] \n
-
-        Passive (diastolic) elastance [mmHg/l]. Elastance is pressure divided
-        by volume ([G] eqn 1), so dividing [G] eqn 18 by Vv gives
-            E_p = Pv/Vv = h2*Vv + h1 + h0/Vv
-        Not used in the simulation (Pv below is used instead), kept for reference.
-
-        Example:
-            E_p(0.1) -> 10749 mmHg/l
-    """
-    return h2*Vv + h1 + h0/Vv
-    #return 2+h2*Vv + h1
 
 def Pv(t_global, Vv):
     """
@@ -244,7 +230,7 @@ def Pv(t_global, Vv):
             Pv(0, 0.12)  -> 6.95 mmHg
             Pv(60, 0.10) -> 5.02 mmHg   (during the strain, ITP = 40)
     """
-    return ((h2*Vv**2 + h1*Vv + h0)+ITP(t_global)) * Fix_factor_passive
+    return ((h2*Vv**2 + h1*Vv + h0)+ITP(t_global)) * Fix_factor_passive #TODO figuring out how to use fixfactor on PV part
 
 # ======================================================================
 # Active elastance ([G] eqns 17, 20-29) - the ventricle during systole
@@ -259,7 +245,7 @@ def Pv(t_global, Vv):
 # fits them with 2nd-order polynomials, with a switch at Ved = 0.055 l for
 # A1 and A3 ([G] p. 130).
 
-def A1(Ved):
+def A1(Ved): #TODO make the boundary based on humans. Maybe a variable that can be changed
     """ [G] eqn 20. Example: A1(0.14) -> 10.59 """
     if Ved <= 0.055:
         return 2.1e-3*Ved**2 - 0.2338*Ved + 10.6
@@ -294,7 +280,7 @@ scale_A = 6.5
 scale_B = 0.4
 scale_C = 5.5
 
-def E_H(Ved, t):
+def E_H(Ved, t): #TODO move all variables/constants to the top, then functions then main 
     """
         Ved : end-diastolic volume of this beat [l] \n
         t : time since the start of this beat's contraction [s] (local time,
@@ -316,9 +302,9 @@ def E_H(Ved, t):
             E_H      6.9   6.9    14.1   969    149    6.9    mmHg/l
             -> the peak of about 1000 mmHg/l is at t = 0.33/1.025 = 0.32 s
     """
-    fs = (N_ursino(P_reflex) - f_min)/(f_max - f_min) # from 0 to 1
-    afs = 1 + 0.5*fs - 0.35*fs**2
-    bfs = 1 + 0.1*fs - 0.1*fs**2
+    fs = (N_ursino(P_reflex) - f_min)/(f_max - f_min) # from 0 to 1 #TODO Change the N_urisino to the symp function 
+    afs = 1 + 0.5*fs - 0.35*fs**2 # Increase = harder contraction #TODO Change it based on Greene innervated left ventricle
+    bfs = 1 + 0.1*fs - 0.1*fs**2 # increase = faster contraction #TODO Change it based on Greene innervated left ventricle
 
     # Add up the three Gaussians of [G] eqn 17. The for loop takes one
     # (A, B, C) triple at a time.
@@ -477,7 +463,7 @@ ejection_end_event.terminal = True
 ejection_end_event.direction = +1 # PA - Pv goes from negative to positive when Pv becomes less than PA
 
 
-def relaxation_end_event(t, x, Ved, cycle_offset):
+def relaxation_end_event(t, x, Ved, cycle_offset): #TODO make changes to the these to make it work during Valsalva 
     """
         End of isovolumic relaxation: the mitral valve opens when Pv falls below PAS.
         Returns (PAS - 0.1) - Pv, which goes from negative to positive, so
@@ -507,7 +493,7 @@ relaxation_end_event.direction = +1 # (PAS - 0.1) - Pv goes from negative to pos
 # Simplifications compared with [U] (because this model goes beat by beat):
 #   - [U] uses the carotid sinus pressure, filtered by a dynamic block ([U] Eq. 30).
 #     Here the mean pressure at Rb over one beat is used, without Eq. 30.
-#   - [U] has time constants for the heart period (tau_T,s = 2 s, tau_T,v = 1.5 s,
+#   - [U] has time constants for the heart period (tau_T,s = 2 s, tau_T,v = 1.5 s, 
 #     [U] Eqs. 39 and 41). Here the static values are used directly.
 #   - The pure delays (D_T,s = 2 s, D_T,v = 0.2 s, [U] Table 3) are made by
 #     using the pressure from earlier beats (see the loop).
@@ -547,21 +533,21 @@ def N_ursino(P):
     """
     x = (P - Pn) / ka
 
-    # Stop the program on invalid values
+    # Stop the program on invalid values #? why are we doing this? how does it overflow
     if not np.isfinite(x):
         raise ValueError(
             f"Invalid value in N_ursino: "
             f"P={P}, Pn={Pn}, ka={ka}, x={x}"
         )
 
-    # Limit the exponent, so np.exp does not overflow
-    x = np.clip(x, -50.0, 50.0)
+    # Limit the exponent, so np.exp does not overflow #? Why? 
+    x = np.clip(x, -50.0, 50.0) 
 
-    e = np.exp(x)
+    e = np.exp(x) 
 
     return (f_min + f_max * e) / (1.0 + e)
 
-def sym_ursino(P):
+def sym_ursino(P): #? why are we inputting pressure again? shoundn't it be firing rate?
     """
         P : pressure [mmHg] \n
 
@@ -574,9 +560,9 @@ def sym_ursino(P):
             sym_ursino(92)  -> 4.67
             sym_ursino(130) -> 2.73
     """
-    return f_es_inf + (f_es0 - f_es_inf)*np.exp(-k_es*N_ursino(P))
+    return f_es_inf + (f_es0 - f_es_inf)*np.exp(-k_es*N_ursino(P)) 
 
-def para_ursino(P):
+def para_ursino(P): #? why are we inputting pressure again? shoundn't it be firing rate?
     """
         P : pressure [mmHg] \n
 
@@ -594,8 +580,8 @@ def para_ursino(P):
 
 def heart_period(P_sym,P_vag):
     """
-        P_sym : pressure that drives the sympathetic part [mmHg] (from a few beats ago) \n
-        P_vag : pressure that drives the vagal part [mmHg] (from the last beat) \n
+        P_sym : pressure that drives the sympathetic part [mmHg] (from a few beats ago) \n #? how many sampels is that?
+        P_vag : pressure that drives the vagal part [mmHg] (from the last beat) \n #? i know that we are sampling the model when calculatiing it. how many samples are 0.2s ago
 
         Heart period T [s], static version of [U] Eqs. 38-42:
             dT_s = G_Ts * ln(f_es - f_es_min + 1)  if f_es >= f_es_min, else 0   [U] Eq. 38
@@ -619,12 +605,12 @@ def heart_period(P_sym,P_vag):
         dT_s = 0.0
 
     dT_v = G_Tv*para_ursino(P_vag)                                        # vagal: lengthens
-    return T0 + dT_s + dT_v
+    return T0 + dT_s + dT_v  #? Where is the delay here?
 
 # np.trapz was renamed np.trapezoid in numpy 2.0. This line uses the new name
 # if it exists, and the old one otherwise, so the code runs on both versions.
-_trapz = getattr(np, "trapezoid", None) or np.trapz
-T_beat = heart_period(Pn,Pn)       # heart period of the first beat (resting value, 1.152 s)
+_trapz = getattr(np, "trapezoid", None) or np.trapz #? this seems extensive. maybe just make sure you have the right numpy
+T_beat = heart_period(Pn,Pn)       # heart period of the first beat (resting value, 1.152 s) #? so the first heartbeat is 52 bpm. We should just make this dependent on the subject. 
 
 # ======================================================================
 # Ursino (1998) baroreflex: peripheral resistance ([U] Eqs. 35-37, Table 3)
@@ -658,7 +644,7 @@ def sigma_R(G, fes):
             sigma_R(G_Rsp, 2.0) -> 0      (below f_es_min = 2.66)
             sigma_R(G_Rsp, 5.0) -> 0.84 mmHg*s/ml
     """
-    return G*np.log(np.maximum(fes - f_es_min, 0) + 1)
+    return G*np.log(np.maximum(fes - f_es_min, 0) + 1) #? i would like the fork function to be there
 
 def TPR_u(dRsp, dRep):
     """
@@ -676,10 +662,10 @@ def TPR_u(dRsp, dRep):
 fes_ref = sym_ursino(Pn)                                       # sympathetic firing at the set point (4.67 spikes/s)
 dRsp, dRep = sigma_R(G_Rsp, fes_ref), sigma_R(G_Rep, fes_ref)  # start at the resting values (no transient at t = 0)
 TPR_ref = TPR_u(dRsp, dRep)                                    # resting Ursino TPR, the reference for kR
-RR_base = 8550*0.2                                             # resting RR. CHANGED FROM [G]: 8550 -> 8550*0.2
+RR_base = 8550*0.2                                             # resting RR. CHANGED FROM [G]: 8550 -> 8550*0.2 #? but why?
 kR = 1.0                                                       # RR scale factor used by the next beat
-fes_hist_t, fes_hist = [0.0], [fes_ref]                        # sympathetic firing history (time, value), for the delay
-
+fes_hist_t, fes_hist = [0.0], [fes_ref]                        # sympathetic firing history (time, value), for the delay #? i think the delay should be in samples. the model is being calculated at 1000Hz. 
+#? 200 samples for 0.2 and 3000 samples for 3. 
 def fes_delayed(t, D):
     """
         t : global time now [s] \n
@@ -695,7 +681,7 @@ def fes_delayed(t, D):
     """
     return np.interp(t - D, fes_hist_t, fes_hist, left=fes_ref)
 
-def lag(Delta, s, T, tau):
+def lag(Delta, s, T, tau): #? where does this come from? 
     """
         Delta : the value now (dRsp or dRep) \n
         s : the target value, the static curve sigma (held constant over the beat) \n
@@ -787,7 +773,7 @@ cycle_offset = 0  # global time when the current beat starts [s]
 #pert_beats = range(8, 18)              # beats 9-18 (0-based index)
 n_beats = 180  # number of heart beats to simulate. 180 beats at about 1 s cover the whole measurement
 record_PAS = []  # atrial source pressure at the start of each beat
-P_reflex = Pn    # pressure the reflex sees, used by E_H. Starts at the set point
+P_reflex = Pn    # pressure the reflex sees, used by E_H. Starts at the set point #? constant = constant. we should just use it
 
 for i in range(n_beats): # one heart beat per loop
     #print(f"Cycle {i+1}")
@@ -798,7 +784,7 @@ for i in range(n_beats): # one heart beat per loop
     # The baroreflex changes RR from beat to beat (kR is calculated at the end of the
     # previous beat). RR is kept constant inside a beat.
     RR = RR_base*kR                     # reflex-scaled peripheral resistance for this beat
-    RG = Rb + (R2*RR/(RR + R2))         # [G] eqn 16. RG depends on RR, so recompute it
+    RG = Rb + (R2*RR/(RR + R2))         # [G] eqn 16. RG depends on RR, so recompute it 
     record_RR.append(RR)
 
 
@@ -879,11 +865,11 @@ for i in range(n_beats): # one heart beat per loop
     #     (record_meanPB[-1] is this beat, [-4] is 3 beats back, about 2.5-3.5 s).
     #     Until there are 4 beats, use the set point Pn.
     #   vagal, D_T,v = 0.2 s: shorter than a beat, so use this beat.
-    if len(record_meanPB) >= 4:  # make sure we have at least 4 beats to compute the sympathetic firing rate
+    if len(record_meanPB) >= 4:  # make sure we have at least 4 beats to compute the sympathetic firing rate #TODO figure out how to do it on 4*1000 samples before instead of seconds
         P_sym = record_meanPB[-4]
     else:
         P_sym = Pn
-    P_vag = meanPB # calculate vagal firing rate based on the last beat
+    P_vag = meanPB # calculate vagal firing rate based on the last beat #TODO make it based on 0.2*1000 sampels before 
     record_P_sym.append(P_sym)
     record_P_vag.append(P_vag)
     T_beat = heart_period(P_sym,P_vag)
