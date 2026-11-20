@@ -128,10 +128,10 @@ def ITP(t_global):
             ITP(10) -> 0     (no strain)
             ITP(60) -> 40    (during the strain, 58.4-73.4 s)
     """
-    u=np.where((t_global>=start_time_VM)&(t_global<=end_time_VM),40,0)
+    u = np.where((t_global>=start_time_VM)&(t_global<=end_time_VM),40,0)
     return u
 
-def Pv(t_global, Vv):
+def Pv(t_global,Vv):
     """
         t_global : global time [s] \n
         Vv : ventricle volume [l] \n
@@ -150,7 +150,7 @@ def Pv(t_global, Vv):
             Pv(0, 0.12)  -> 6.95 mmHg
             Pv(60, 0.10) -> 5.02 mmHg   (during the strain, ITP = 40)
     """
-    return ((h2*Vv**2 + h1*Vv + h0)+ITP(t_global)) * Fix_factor_passive #TODO figuring out how to use fixfactor on PV part
+    return (h2*Vv**2 + h1*Vv + h0) * Fix_factor_passive #TODO figuring out how to use fixfactor on PV part
 
 # ======================================================================
 # Active elastance ([G] eqns 17, 20-29) - the ventricle during systole
@@ -228,7 +228,7 @@ def filling_rhs(t, x, Ved,cycle_offset):
     """
     x1, x2, x3, x4 = x   # x1=P_CR, x2=Vv, x3=P_CL, x4=flow through L
     dx1 = (-x1 + RR * x4) / (CR * (R2 + RR))
-    dx2 = (PAS_L+PAS_R(t+cycle_offset) - Pv(t+cycle_offset, x2) ) / Rm
+    dx2 = (PAS_L+PAS_R(t+cycle_offset) - Pv(t+cycle_offset, x2) +ITP(t+cycle_offset) ) / Rm
     dx3 = (-x3 - RL * x4) / (CL * (R1 + RL))
     dx4 = (-x4 / L) * (Rb + R1*RL/(R1+RL) + R2*RR/(R2+RR)) \
           + RL * x3 / (L * (R1 + RL)) \
@@ -307,7 +307,7 @@ def contraction_end_event(t, x, Ved, cycle_offset):
     """
     x1, x2, x3, x4 = x   # x1=P_CR, x2=Vv, x3=P_CL, x4=flow through L
     dx3 = (-x3-RL*x4) / (CL * (R1 + RL))
-    Pv_active = (E_H(Ved, t) * x[1]+ITP(t+cycle_offset))
+    Pv_active = (E_H(Ved, t) * x[1]+ ITP(t+cycle_offset))
     #print("Contraction phase: Pv_active =", Pv_active, "P_A =", P_A(x3, dx3), "x1 =", x1, "x2 =", x2, "x3 =", x3, "x4 =", x4)
     return P_A(x3, dx3) - Pv_active   # 0 when Pv reaches P_A
 
@@ -320,8 +320,8 @@ def ejection_end_event(t, x, Ved, cycle_offset):
         dx3 is from the ejection equations ([G] eqn 13).
     """
     x1, x2, x3, x4 = x   # x1=P_CR, x2=Vv, x3=P_CL, x4=flow through L
-    dx3 = (RL * (E_H(Ved,t)*x2+ITP(t+cycle_offset))-(RL+Ra)*x3-RL*Ra*x4) / (CL * RT)
-    Pv_active = (E_H(Ved, t) * x[1]+ITP(t+cycle_offset))
+    dx3 = (RL * (E_H(Ved,t)*x2+ ITP(t+cycle_offset))-(RL+Ra)*x3-RL*Ra*x4) / (CL * RT)
+    Pv_active = (E_H(Ved, t) * x[1] + ITP(t+cycle_offset))
     #print("Ejection phase: Pv_active =", Pv_active, "P_A =", P_A(x3, dx3), "x1 =", x1, "x2 =", x2, "x3 =", x3, "x4 =", x4)
     return P_A(x3, dx3) - Pv_active   # 0 when Pv reaches P_A
 
