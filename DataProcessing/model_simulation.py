@@ -69,49 +69,30 @@ import scipy
 import matplotlib.pyplot as plt
 import  sys
 
-def PAS_R(t):
+k_VM = 0.3  # fraction of PAS left during the strain (tune to get ~30-50 % SV drop)
+
+def PAS_R(solved_x4):
+        return solved_x4 * L
+
+def PAS_total(t_global, x4):
     """
-        t : global time [s] (time since the start of the simulation, not of the beat) \n
-
-        The part of the atrial source pressure that changes during the strain [mmHg].
-        Not from the papers: this is our own description of the venous return
-        during the Valsalva manoeuvre.
-
-          - before the strain: 5 mmHg
-          - when the strain starts it jumps to 15 mmHg, and then falls
-            exponentially (time constant tau = 2 s) towards 10 mmHg at the end
-            of the strain.
-          - after the strain: 5 mmHg again
-
-        The exponential is normalised so it is exactly 15 at the start and
-        exactly 10 at the end of the strain, so there is no jump at the end:
-            exp_now = exp(-(t - start) / tau)      1 at the start, small at the end
-            exp_end = exp(-(end - start) / tau)    the value of exp_now at the end
-            (exp_now - exp_end) / (1 - exp_end)    goes from 1 (start) to 0 (end)
-
-        Examples:
-            PAS_R(0)    -> 5.0    (before the strain)
-            PAS_R(58.4) -> 15.0   (start of the strain)
-            PAS_R(60.4) -> 11.84  (2 s = one time constant into the strain)
-            PAS_R(73.4) -> 10.0   (end of the strain)
-            PAS_R(80)   -> 5.0    (after the strain)
+        Atrial source pressure [mmHg]. Reduced to k_VM of its value while
+        ITP > 0 (the strain), to model the reduced venous return.
     """
-    tau = 2.0
+    k = np.where(ITP(t_global) > 0, k_VM, 1.0)
+    return k * (PAS_L + PAS_R(x4))
 
-    if t < start_time_VM:
-        return 5.0
 
-    elif t <= end_time_VM:
-        # Normalised exponential decay (from 1 at the start to 0 at the end)
-        exp_now = np.exp(-(t - start_time_VM) / tau)
-        exp_end = np.exp(-(end_time_VM - start_time_VM) / tau)
+def last_x4():
+    """
+        Last recorded sample of x4 (flow through L) [l/s].
+        Returns 0 before anything is recorded (first beat), otherwise the
+        final value of the most recent segment.
+    """
+    if not record_x4:
+        return 0
+    return record_x4[-1][-1]
 
-        return 10.0 + (15.0 - 10.0) * (
-            (exp_now - exp_end) / (1.0 - exp_end)
-        )
-
-    else:
-        return 5.0
 
 def ITP(t_global):
     """
@@ -228,7 +209,7 @@ def filling_rhs(t, x, Ved,cycle_offset):
     """
     x1, x2, x3, x4 = x   # x1=P_CR, x2=Vv, x3=P_CL, x4=flow through L
     dx1 = (-x1 + RR * x4) / (CR * (R2 + RR))
-    dx2 = (PAS_L+PAS_R(t+cycle_offset) - Pv(t+cycle_offset, x2) +ITP(t+cycle_offset) ) / Rm
+    dx2 = (PAS - Pv(t+cycle_offset, x2) + ITP(t+cycle_offset)) / Rm
     dx3 = (-x3 - RL * x4) / (CL * (R1 + RL))
     dx4 = (-x4 / L) * (Rb + R1*RL/(R1+RL) + R2*RR/(R2+RR)) \
           + RL * x3 / (L * (R1 + RL)) \
@@ -338,7 +319,7 @@ def relaxation_end_event(t, x, Ved, cycle_offset): #TODO make changes to the the
     x1, x2, x3, x4 = x   # x1=P_CR, x2=Vv, x3=P_CL, x4=flow through L
     Pv_active = (E_H(Ved, t) * x[1]+ITP(t+cycle_offset))
     #print("Relaxation phase: Pv_active =", Pv_active, "x1 =", x1, "x2 =", x2, "x3 =", x3, "x4 =", x4)
-    return (PAS_L+PAS_R(t+cycle_offset) - 0.1) - Pv_active   # 0 when Pv reaches P_AS. NEW: was 9.9; now follows PAS so it still works when PAS is lowered
+    return (PAS) - Pv_active   # 0 when Pv reaches P_AS. NEW: was 9.9; now follows PAS so it still works when PAS is lowered
 
 
 def N_ursino(P):
@@ -553,7 +534,7 @@ def store(sol, phase, cycle_offset):
 # ======================================================================
 Rm  = 12    # mitral valve resistance, mmHg*s/l (altered from 0.33 to 12 to match the correct physiological range)
 PAS_L=5
-start_time_VM = 58.4
+start_time_VM = 10
 end_time_VM = start_time_VM + 15
 Ra = 0.6*20
 Fix_factor_passive = 0.0045
@@ -646,7 +627,7 @@ cycle_offset = 0  # global time when the current beat starts [s]
 
 #PAS_base, PAS_low = 10.0, 6.0          # mmHg
 #pert_beats = range(8, 18)              # beats 9-18 (0-based index)
-n_beats = 180  # number of heart beats to simulate. 180 beats at about 1 s cover the whole measurement
+n_beats = 50  # number of heart beats to simulate. 180 beats at about 1 s cover the whole measurement
 record_PAS = []  # atrial source pressure at the start of each beat
 P_reflex = Pn    # pressure the reflex sees, used by E_H. Starts at the set point #? constant = constant. we should just use it
 
@@ -658,7 +639,8 @@ t_segments = []
 for i in range(n_beats): # one heart beat per loop
     #print(f"Cycle {i+1}")
     #PAS = PAS_low if i in pert_beats else PAS_base
-    PAS=PAS_L+PAS_R(cycle_offset)
+      # fraction of venous return left during the strain (tune to get ~30-50 % SV drop)
+    PAS = float(PAS_total(cycle_offset, last_x4()))
     record_PAS.append(PAS)
 
     # The baroreflex changes RR from beat to beat (kR is calculated at the end of the
@@ -779,8 +761,20 @@ rate and the peripheral resistance, with the Valsalva strain marked.
 (load_model.py runs this file with runpy, which does not run this part.)
 """
 if __name__ == "__main__":
+    PHASE_COLORS = {
+    "contraction": "#eb6834",
+    "ejection":    "#2a78d6",
+    "relaxation":  "#e87ba4",
+    "filling":     "#1baf7a",
+    }
+    PHASE_LABELS = {
+    "contraction": "Isovolumic contraction",
+    "ejection":    "Ejection",
+    "relaxation":  "Isovolumic relaxation",
+    "filling":     "Filling",
+    }
     # This part only runs when you run this file directly
-
+"""
     # Put the phases after each other into one long array (the same as load_model.py)
     t_all = np.concatenate(record_t)
     pa_all = np.concatenate(record_PA)
@@ -810,3 +804,157 @@ if __name__ == "__main__":
 
     fig.tight_layout()
     plt.show()
+    fig, axs = plt.subplots(2, 2, figsize=(10, 6))
+
+titles  = ["x1: pressure across $C_R$ (descending & abdominal aorta)", "x2: ventricular volume",
+           "x3: pressure across $C_L$ (ascending aorta)", "x4: flow through $L$"]
+ylabels = ["Pressure (mmHg)", "Volume (L)", "Pressure (mmHg)", "Flow (L/s)"]
+data    = [record_x1, record_x2, record_x3, record_x4]
+
+for ax, title, ylabel, values in zip(axs.flat, titles, ylabels, data):
+    for t, y, phase in zip(t_segments, values, record_phase):
+        ax.plot(t, y, color=PHASE_COLORS[phase], lw=1)
+    ax.set_title(title)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel(ylabel)
+    ax.grid(True, color="#e1e0d9")
+
+plt.tight_layout(rect=[0, 0, 1, 0.93]) 
+
+handles = [plt.Line2D([0], [0], color=PHASE_COLORS[p], lw=2, label=PHASE_LABELS[p])
+           for p in ["contraction", "ejection", "relaxation", "filling"]]
+fig.legend(handles=handles, loc="upper center", ncol=4, bbox_to_anchor=(0.5, 1.0))
+"""
+# --------- Plotting the Ventricular and Aortic pressures ---------
+
+fig_pressure, ax = plt.subplots(figsize=(10, 6))
+
+for t, pv_values, pa_values, x4, phase in zip(
+    t_segments, record_Pv, record_PA, record_x4, record_phase
+):
+    ax.plot(t, pa_values, "r--", lw=1.5, zorder=3)
+    ax.plot(t, pv_values, color=PHASE_COLORS[phase], lw=1)
+
+ax.step(record_beat_start, record_PAS, where="post", color="k", lw=1.5, zorder=2)
+ax.set_title("Ventricular and aortic pressure")
+ax.set_xlabel("Time (s)")
+ax.set_ylabel("Pressure [mmHg]")
+ax.grid(True)
+
+plt.tight_layout(rect=[0, 0, 1, 0.9])
+
+handles = [
+    plt.Line2D([0], [0], color=PHASE_COLORS[p], lw=2, label=PHASE_LABELS[p])
+    for p in ["contraction", "ejection", "relaxation", "filling"]
+]
+handles.append(plt.Line2D([0], [0], color="red", lw=2, label="Aortic pressure"))
+handles.append(plt.Line2D([0], [0], color="black", lw=2, label="PAS_R"))
+# ax.legend(handles=handles)
+fig_pressure.legend(handles=handles, loc="upper center", ncol=5, bbox_to_anchor=(0.5, 1.0))
+              
+# --------- Plotting the P-V diagram ---------
+
+fig_pv, ax = plt.subplots(figsize=(10, 6))
+
+for x2_values, pv_values, phase in zip(
+    record_x2, record_Pv, record_phase
+):
+    ax.plot(x2_values, pv_values, color=PHASE_COLORS[phase], lw=1)
+
+ax.set_title("Pressure-Volume diagram")
+ax.set_xlabel("Ventricular volume (l)")
+ax.set_ylabel("Ventricular pressure [mmHg]")
+ax.grid(True)
+
+plt.tight_layout(rect=[0, 0, 1, 0.93]) 
+
+handles = [plt.Line2D([0], [0], color=PHASE_COLORS[p], lw=2, label=PHASE_LABELS[p])
+           for p in ["contraction", "ejection", "relaxation", "filling"]]
+fig_pv.legend(handles=handles, loc="upper center", ncol=4, bbox_to_anchor=(0.5, 1.0))
+
+fig, ax = plt.subplots(figsize=(10,6))
+
+for t, dp, phase in zip(
+        t_segments,
+        record_PB,
+        record_phase):
+
+    ax.plot(t, dp,
+            color=PHASE_COLORS[phase])
+
+ax.set_title("Pressure drop across RB")
+ax.set_xlabel("Time [s]")
+ax.set_ylabel("ΔP [mmHg]")
+ax.grid(True)
+
+# pulsen gemmen hele systemet 
+Puls= np.concatenate(record_PB)
+print("Mean pressure drop across RB: ", np.mean(Puls), "mmHg")
+
+record_T_beat = np.asarray(record_T_beat)
+fig_u, axu = plt.subplots(4, 1, figsize=(9, 10), sharex=True)
+
+# Mean pressure
+axu[0].plot(record_beat_start, record_meanPB, "o-b")
+axu[0].set_ylabel("Mean P (mmHg)")
+axu[0].grid(True)
+
+# Sympatisk og vagal aktivitet
+axu[1].plot(record_beat_start, record_P_sym,
+            "o-r", label="Sympathetic")
+axu[1].plot(record_beat_start, record_P_vag,
+            "o-g", label="Vagal")
+axu[1].set_ylabel("Firing rate")
+axu[1].legend()
+axu[1].grid(True)
+
+# HR
+axu[2].plot(record_beat_start, 60/record_T_beat,
+            "o-k")
+axu[2].set_ylabel("HR (bpm)")
+axu[2].grid(True)
+
+# PAS-ændring
+axu[3].step(record_beat_start,
+            record_PAS,
+            where="post",
+            color="purple")
+axu[3].set_ylabel("PAS (mmHg)")
+axu[3].set_xlabel("Time (s)")
+axu[3].grid(True)
+axu[0].set_title("Baroreflex response")
+
+fig_u.tight_layout()
+fig_u.savefig("greene_ursino_HR.png", dpi=150)
+plt.show()
+"""
+record_meanPB = np.array(record_meanPB)
+record_T_beat = np.array(record_T_beat)
+
+record_P_sym = np.array(record_P_sym)
+record_P_vag = np.array(record_P_vag)
+
+record_beat_start = np.array(record_beat_start)
+record_PAS = np.array(record_PAS)
+print(" beat   mean P_RB    N     f_sym  f_vagal   T        HR")  # NEW
+for c in range(len(record_T_beat)):  # NEW
+    P = record_meanPB[c]  # NEW
+    print(f"  {c+1:3d}  PAS={record_PAS[c]:4.1f}  {P:7.1f}  {N_ursino(P):5.1f}  {sym_ursino(P):6.2f}  {para_ursino(P):6.2f}   "  # NEW
+          f"{record_T_beat[c]:.3f} s  {60/np.array(record_T_beat[c]):5.1f} bpm")  # NEW
+
+fig_u, axu = plt.subplots(4, 1, figsize=(8, 10), sharex=True)  # NEW
+axu[3].step(record_beat_start, record_PAS, where="post"); axu[3].set_ylabel("PAS (mmHg)")  # NEW
+axu[0].plot(record_beat_start, record_meanPB, "o-"); axu[0].set_ylabel("mean P at RB (mmHg)")  # NEW
+axu[1].plot(record_beat_start, sym_ursino(record_P_sym), "o-", label="sympathetic")  # NEW
+axu[1].plot(record_beat_start, para_ursino(record_P_vag), "o-", label="parasympathetic (vagal)")  # NEW
+axu[1].set_ylabel("firing (spikes/s)"); axu[1].legend()  # NEW
+axu[2].plot(record_beat_start, 60/record_T_beat, "o-"); axu[2].set_ylabel("heart rate (bpm)")  # NEW
+axu[3].set_xlabel("Time (s)")  # NEW
+t_lo = record_beat_start[pert_beats[0]]; t_hi = record_beat_start[pert_beats[-1] + 1]  # NEW
+for a in axu: a.axvspan(t_lo, t_hi, color="#f3e6d6", alpha=0.6); a.grid(alpha=0.3)  # NEW
+axu[0].set_title("Shaded: PAS lowered (reduced venous return)")  # NEW
+fig_u.tight_layout()  # NEW
+fig_u.savefig("greene_ursino_HR.png", dpi=150)  # NEW
+"""
+plt.show()  # NEW
+
