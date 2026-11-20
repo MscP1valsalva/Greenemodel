@@ -69,7 +69,7 @@ import scipy
 import matplotlib.pyplot as plt
 import  sys
 
-k_VM = 0.3  # fraction of PAS left during the strain (tune to get ~30-50 % SV drop)
+k_VM = 0.1  # fraction of PAS left during the strain (tune to get ~30-50 % SV drop)
 
 def PAS_R(solved_x4):
         return solved_x4 * L
@@ -131,7 +131,7 @@ def Pv(t_global,Vv):
             Pv(0, 0.12)  -> 6.95 mmHg
             Pv(60, 0.10) -> 5.02 mmHg   (during the strain, ITP = 40)
     """
-    return (h2*Vv**2 + h1*Vv + h0) * Fix_factor_passive #TODO figuring out how to use fixfactor on PV part
+    return (h2*Vv**2 + h1*Vv + h0) * Fix_factor_passive #TODO figuring out how to use fixfactor on PV part (fixed)
 
 # ======================================================================
 # Active elastance ([G] eqns 17, 20-29) - the ventricle during systole
@@ -139,14 +139,14 @@ def Pv(t_global,Vv):
 
 def A1(Ved): #TODO make the boundary based on humans. Maybe a variable that can be changed
     """ [G] eqn 20. Example: A1(0.14) -> 10.59 """
-    if Ved <= 0.055:
+    if Ved <= 0.1: # changed from 0.055 to 0.1 cite svendens, lisbeth
         return 2.1e-3*Ved**2 - 0.2338*Ved + 10.6
     else:
         return -1.0133e-3*Ved**2 - 0.0626*Ved + 10.6
 def A2(Ved): return 150.0                                   # [G] eqn 21
 def A3(Ved):
     """ [G] eqn 22. Example: A3(0.14) -> 10.17 """
-    if Ved <= 0.055:
+    if Ved <= 0.1: # changed from 0.055 to 0.1 cite svendens, lisbeth
         return 2.8e-3*Ved**2 - 0.3*Ved + 10.2
     else:
         return 6.476e-4*Ved**2 - 0.1816*Ved + 10.2
@@ -157,7 +157,7 @@ def C1(Ved): return 9.7e-6*Ved**2 - 2.8e-4*Ved + 0.12       # [G] eqn 26
 def C2(Ved): return 0.06                                    # [G] eqn 27
 def C3(Ved): return -40.2e-6*Ved**2 + 4.78e-3*Ved + 0.06    # [G] eqn 28
 
-def E_H(Ved, t): #TODO move all variables/constants to the top, then functions then main 
+def E_H(Ved, t): #TODO move all variables/constants to the top, then functions then main (fixed)
     """
         Ved : end-diastolic volume of this beat [l] \n
         t : time since the start of this beat's contraction [s] (local time,
@@ -179,9 +179,9 @@ def E_H(Ved, t): #TODO move all variables/constants to the top, then functions t
             E_H      6.9   6.9    14.1   969    149    6.9    mmHg/l
             -> the peak of about 1000 mmHg/l is at t = 0.33/1.025 = 0.32 s
     """
-    fs = (N_ursino(P_reflex) - f_min)/(f_max - f_min) # from 0 to 1 #TODO Change the N_urisino to the symp function 
-    afs = 1 + 0.5*fs - 0.35*fs**2 # Increase = harder contraction #TODO Change it based on Greene innervated left ventricle
-    bfs = 1 + 0.1*fs - 0.1*fs**2 # increase = faster contraction #TODO Change it based on Greene innervated left ventricle
+    fs = (sym_ursino(P_reflex) - f_es_inf)/(f_es0 - f_es_inf) # from 0 to 1  #TODO Change the N_urisino to the symp function (fixed)
+    afs = 1 + 0.5*fs - 0.35*fs**2 + 0.00075*fs**3 # Increase = harder contraction #TODO Change it based on Greene innervated left ventricle (fixed)
+    bfs = 1 + 0.1*fs - 0.007*fs**2 + 0.00015*fs**3 # increase = faster contraction #TODO Change it based on Greene innervated left ventricle (fixed)
 
     # Add up the three Gaussians of [G] eqn 17. The for loop takes one
     # (A, B, C) triple at a time.
@@ -534,7 +534,7 @@ def store(sol, phase, cycle_offset):
 # ======================================================================
 Rm  = 12    # mitral valve resistance, mmHg*s/l (altered from 0.33 to 12 to match the correct physiological range)
 PAS_L=5
-start_time_VM = 10
+start_time_VM = 40
 end_time_VM = start_time_VM + 15
 Ra = 0.6*20
 Fix_factor_passive = 0.0045
@@ -553,7 +553,7 @@ h0, h1, h2 = 0.234, 147.0, 106000.0
 # ======================================================================
 # Active elastance ([G] eqns 17, 20-29) - the ventricle during systole
 # ======================================================================
-D = -150
+D = -200
 scale_A = 6.5
 scale_B = 0.4
 scale_C = 5.5
@@ -595,8 +595,8 @@ Rsp0_u = 2.49        # splanchnic gain and resistance without innervation, mmHg 
 G_Rsp = 0.695 
 G_Rep = 0.53         # extrasplanchnic gain and resistance without innervation, mmHg s/ml ([U] Table 3)
 Rep0_u = 0.78
-tau_R = 6.0              # time constant and pure delay, s ([U] Table 3, the same for sp and ep)
-D_R = 2.0
+tau_R = 0.10              # time constant and pure delay, s ([U] Table 3, the same for sp and ep)
+D_R = 0.1
 
 fes_ref = sym_ursino(Pn)                                       # sympathetic firing at the set point (4.67 spikes/s)
 dRep = sigma_R(G_Rep, fes_ref)  # start at the resting values (no transient at t = 0)
@@ -627,7 +627,7 @@ cycle_offset = 0  # global time when the current beat starts [s]
 
 #PAS_base, PAS_low = 10.0, 6.0          # mmHg
 #pert_beats = range(8, 18)              # beats 9-18 (0-based index)
-n_beats = 50  # number of heart beats to simulate. 180 beats at about 1 s cover the whole measurement
+n_beats = 100  # number of heart beats to simulate. 180 beats at about 1 s cover the whole measurement
 record_PAS = []  # atrial source pressure at the start of each beat
 P_reflex = Pn    # pressure the reflex sees, used by E_H. Starts at the set point #? constant = constant. we should just use it
 
@@ -774,7 +774,7 @@ if __name__ == "__main__":
     "filling":     "Filling",
     }
     # This part only runs when you run this file directly
-"""
+
     # Put the phases after each other into one long array (the same as load_model.py)
     t_all = np.concatenate(record_t)
     pa_all = np.concatenate(record_PA)
@@ -824,7 +824,7 @@ plt.tight_layout(rect=[0, 0, 1, 0.93])
 handles = [plt.Line2D([0], [0], color=PHASE_COLORS[p], lw=2, label=PHASE_LABELS[p])
            for p in ["contraction", "ejection", "relaxation", "filling"]]
 fig.legend(handles=handles, loc="upper center", ncol=4, bbox_to_anchor=(0.5, 1.0))
-"""
+
 # --------- Plotting the Ventricular and Aortic pressures ---------
 
 fig_pressure, ax = plt.subplots(figsize=(10, 6))
@@ -848,7 +848,7 @@ handles = [
     for p in ["contraction", "ejection", "relaxation", "filling"]
 ]
 handles.append(plt.Line2D([0], [0], color="red", lw=2, label="Aortic pressure"))
-handles.append(plt.Line2D([0], [0], color="black", lw=2, label="PAS_R"))
+handles.append(plt.Line2D([0], [0], color="black", lw=2, label="PAS"))
 # ax.legend(handles=handles)
 fig_pressure.legend(handles=handles, loc="upper center", ncol=5, bbox_to_anchor=(0.5, 1.0))
               
