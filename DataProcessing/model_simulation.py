@@ -69,32 +69,6 @@ import scipy
 import matplotlib.pyplot as plt
 import  sys
 
-# ======================================================================
-# Heart parameters ([G] eqn 31) and the Valsalva manoeuvre
-# ======================================================================
-# Greene's values were fitted to dogs. Several of them are changed so the
-# model gives human pressures and volumes. Every change is marked with
-# "CHANGED FROM [G]".
-
-# Mitral valve resistance [mmHg*s/l].
-# CHANGED FROM [G]: 0.33 -> 12. With 0.33 the ventricle fills almost at once.
-# A larger resistance makes the filling slower, so the filling phase becomes
-# longer and more like a human heart.
-Rm  = 12    # mitral valve resistance, mmHg*s/l (altered from 0.33 to 12 to match the correct physiological range)
-
-# Atrial source pressure. In [G] there is one constant PAS = 10 mmHg ([G] eqn 31).
-# Here it is split in two: PAS = PAS_L + PAS_R(t)
-#   PAS_L : a constant part [mmHg]
-#   PAS_R : a part that changes during the Valsalva manoeuvre (function below)
-# Before and after the strain PAS = 5 + 5 = 10 mmHg, the same as Greene.
-PAS_L=5
-
-# Time of the Valsalva strain [s]. The strain starts at 58.4 s and lasts 15 s.
-# The same start time is used in model_validation.py (VM_START), so the model
-# and the measurement have the strain at the same time.
-start_time_VM = 58.4
-end_time_VM = start_time_VM + 15
-
 def PAS_R(t):
     """
         t : global time [s] (time since the start of the simulation, not of the beat) \n
@@ -139,18 +113,6 @@ def PAS_R(t):
     else:
         return 5.0
 
-# Aortic valve resistance [mmHg*s/l].
-# CHANGED FROM [G]: 0.6 -> 0.6*20 = 12, tuned so the pressure curve fits the measurements.
-Ra = 0.6*20
-
-# Scale factor for the passive pressure-volume curve (see Pv below).
-# CHANGED FROM [G]: Greene's curve ([G] eqn 30) is for a dog heart (volumes of
-# about 0.02-0.05 l). A human ventricle is about 0.1-0.15 l, and with
-# Greene's numbers that would give a diastolic pressure of more than
-# 1000 mmHg. Multiplying by 0.0045 gives a few mmHg at human volumes, e.g.
-# Pv(0.11 l) = 5.8 mmHg.
-Fix_factor_passive = 0.0045
-
 def ITP(t_global):
     """
         t_global : global time [s] (a number or a numpy array) \n
@@ -168,48 +130,6 @@ def ITP(t_global):
     """
     u=np.where((t_global>=start_time_VM)&(t_global<=end_time_VM),40,0)
     return u
-
-# ======================================================================
-# Arterial-load parameters ([G] eqn 32, circuit in [G] Fig. 2)
-# ======================================================================
-# The arterial tree is a pi-type circuit ([G] p. 128):
-#
-#   PA --+-- R1 -- CL          proximal part: ascending aorta and aortic arch
-#        +-- RL -- ground      (RL = cerebral and coronary resistance)
-#        +-- L -- Rb --+-- R2 -- CR      distal part: descending aorta,
-#                      +-- RR -- ground  RR = systemic peripheral resistance
-#
-# The comments behind each value describe what we saw when tuning it.
-CL = 2.35e-4 * 5 # the lower it is, the more pressure in the ascending aorta, but it reduces stroke volume
-R1 = 60 *3# sets the height of the notch, and also the height of the curve.
-#R2=R1
-CR = 1.33e-4 *8# the lower it is, the more pressure in the descending aorta, but it reduces stroke volume
-R2 = 300.0*0.1 # a high value removes the notch, increases amplitude, lowers the cutting point. A 0.x value raises the cutting point, but also the pressure
-RL = 12640.0 * 0.2 # the lower it is, the more volume ejected per beat.
-Rb = 60.0 # if it increases, the pressure rises but the cut points do not.
-# RR is not set here: it is set at the start of every beat in the loop below
-# (RR = RR_base*kR), because the baroreflex changes it from beat to beat.
-#RR = 8550.0 * 0.5 # the lower it is, the more volume ejected per beat
-#RR=1710*0.8 #use for RR part later maybe
-#RL=RR+1641
-L  = 21.9  # inertance of the blood [mmHg*s^2/l], unchanged from [G]
-
-# RT, [G] eqn 15: appears when the circuit is solved for the ejection phase,
-# where Ra, R1 and RL all meet at the aortic root.
-RT = R1* Ra + R1*RL + Ra*RL   # total resistance, mmHg*s/l
-# RG, [G] eqn 16: Rb in series with R2 and RR in parallel. Also set in the
-# loop, because RR changes every beat.
-# Note: the printed eqn 16 reads Rb*(1 + R2/(R2+RR)); the version used here
-# is the one that comes out when the circuit is solved (and matches eqns 6 and 10).
-#RG = Rb+(R2*RR/(RR+R2))   # total resistance, mmHg*s/l (RR changed from Rb)
-# when RL is larger than RR, the end of the notch moves up.
-
-# ======================================================================
-# Passive elastance ([G] eqns 18, 30) - the ventricle during filling
-# ======================================================================
-# Coefficients of Greene's passive pressure-volume curve, [G] eqn 30
-h0, h1, h2 = 0.234, 147.0, 106000.0
-
 
 def Pv(t_global, Vv):
     """
@@ -235,15 +155,6 @@ def Pv(t_global, Vv):
 # ======================================================================
 # Active elastance ([G] eqns 17, 20-29) - the ventricle during systole
 # ======================================================================
-# Greene describes the contraction as a sum of three Gaussian curves:
-#     E_H(Ved, t) = sum_i A_i(Ved) * exp(-B_i(Ved)^2 * (t - C_i(Ved))^2) + D     [G] eqn 17
-#   A_i = amplitude, B_i = width (bandwidth), C_i = time of the peak,
-#   D   = a constant that sets the small elastance in diastole.
-# One Gaussian fits an isovolumic beat. The ejecting beat is skewed, so two
-# more Gaussians are added ([G] Fig. 4).
-# A, B and C depend on the end-diastolic volume Ved (Frank-Starling). Greene
-# fits them with 2nd-order polynomials, with a switch at Ved = 0.055 l for
-# A1 and A3 ([G] p. 130).
 
 def A1(Ved): #TODO make the boundary based on humans. Maybe a variable that can be changed
     """ [G] eqn 20. Example: A1(0.14) -> 10.59 """
@@ -264,21 +175,6 @@ def B3(Ved): return -4e-4*Ved + 0.0431                      # [G] eqn 25
 def C1(Ved): return 9.7e-6*Ved**2 - 2.8e-4*Ved + 0.12       # [G] eqn 26
 def C2(Ved): return 0.06                                    # [G] eqn 27
 def C3(Ved): return -40.2e-6*Ved**2 + 4.78e-3*Ved + 0.06    # [G] eqn 28
-
-# CHANGED FROM [G]: D = 100 mmHg/l in [G] eqn 29.
-# Here D = -150. With Ved in litres and t in seconds, B1 and B3 are so small
-# (about 0.016 and 0.043) that Gaussian 1 and 3 are almost flat: together they
-# add about +157 mmHg/l all the time. D = -150 cancels most of this, so the
-# elastance in diastole is small (about 7 mmHg/l), and the contraction
-# itself comes from Gaussian 2.
-D = -150
-
-# Not in [G]: scale factors for the amplitudes (A), widths (B) and peak
-# times (C), tuned so the pressure curve has a human shape and timing.
-# E.g. Gaussian 2 peaks at C2*scale_C = 0.06*5.5 = 0.33 s instead of 0.06 s.
-scale_A = 6.5
-scale_B = 0.4
-scale_C = 5.5
 
 def E_H(Ved, t): #TODO move all variables/constants to the top, then functions then main 
     """
@@ -313,22 +209,6 @@ def E_H(Ved, t): #TODO move all variables/constants to the top, then functions t
         s += afs*scale_A*A * np.exp(-((scale_B*B)**2) * (t*bfs - scale_C*C)**2)
     return s + D
 
-# ======================================================================
-# The differential equations of the four phases ([G] eqns 3-14)
-# ======================================================================
-# All three functions have the form solve_ivp wants: f(t, x, *args) returns
-# dx/dt. The extra arguments (Ved, cycle_offset) are passed with args=(...).
-#   t            : local time, since the start of this beat [s]
-#   cycle_offset : the global time when this beat started [s]
-#   t + cycle_offset is the global time, used for ITP and PAS_R, which follow
-#   the clock of the experiment and not the beat.
-#
-# How the equations come from the circuit (Kirchhoff's current law):
-#   Distal node (after L and Rb): the flow x4 splits into R2-CR and RR, which gives
-#       dx1/dt = (-x1 + RR*x4) / (CR*(R2 + RR))
-#   This is the same in all phases, because the distal part never sees the valves.
-#   Aortic root node PA: what happens here depends on whether the aortic valve
-#   is open (ejection) or closed (the other phases).
 
 def filling_rhs(t, x, Ved,cycle_offset):
     """
@@ -418,19 +298,6 @@ def P_A(x3, dx3):
     """
     return dx3 * CL *R1 +x3
 
-# ======================================================================
-# The ends of the phases (events for solve_ivp)
-# ======================================================================
-# solve_ivp checks the event function at every step. When it crosses zero in
-# the given direction, the phase stops:
-#   .terminal = True  -> stop the integration at the zero crossing
-#   .direction = -1   -> only count crossings from positive to negative
-#   .direction = +1   -> only count crossings from negative to positive
-# The valves are ideal ([G] p. 128): they open and close exactly when the
-# pressures on the two sides are equal, so the events compare pressures.
-# There is no event for the filling phase: it ends when the heart period
-# T_beat set by the baroreflex is over (see the loop).
-
 def contraction_end_event(t, x, Ved, cycle_offset):
     """
         End of isovolumic contraction: the aortic valve opens when Pv reaches PA.
@@ -443,8 +310,6 @@ def contraction_end_event(t, x, Ved, cycle_offset):
     Pv_active = (E_H(Ved, t) * x[1]+ITP(t+cycle_offset))
     #print("Contraction phase: Pv_active =", Pv_active, "P_A =", P_A(x3, dx3), "x1 =", x1, "x2 =", x2, "x3 =", x3, "x4 =", x4)
     return P_A(x3, dx3) - Pv_active   # 0 when Pv reaches P_A
-contraction_end_event.terminal = True
-contraction_end_event.direction = -1 # PA - Pv goes from positive to negative when Pv becomes greater than PA
 
 
 def ejection_end_event(t, x, Ved, cycle_offset):
@@ -459,8 +324,6 @@ def ejection_end_event(t, x, Ved, cycle_offset):
     Pv_active = (E_H(Ved, t) * x[1]+ITP(t+cycle_offset))
     #print("Ejection phase: Pv_active =", Pv_active, "P_A =", P_A(x3, dx3), "x1 =", x1, "x2 =", x2, "x3 =", x3, "x4 =", x4)
     return P_A(x3, dx3) - Pv_active   # 0 when Pv reaches P_A
-ejection_end_event.terminal = True
-ejection_end_event.direction = +1 # PA - Pv goes from negative to positive when Pv becomes less than PA
 
 
 def relaxation_end_event(t, x, Ved, cycle_offset): #TODO make changes to the these to make it work during Valsalva 
@@ -476,40 +339,7 @@ def relaxation_end_event(t, x, Ved, cycle_offset): #TODO make changes to the the
     Pv_active = (E_H(Ved, t) * x[1]+ITP(t+cycle_offset))
     #print("Relaxation phase: Pv_active =", Pv_active, "x1 =", x1, "x2 =", x2, "x3 =", x3, "x4 =", x4)
     return (PAS_L+PAS_R(t+cycle_offset) - 0.1) - Pv_active   # 0 when Pv reaches P_AS. NEW: was 9.9; now follows PAS so it still works when PAS is lowered
-relaxation_end_event.terminal = True
-relaxation_end_event.direction = +1 # (PAS - 0.1) - Pv goes from negative to positive when Pv becomes less than PAS
 
-
-# ======================================================================
-# Ursino (1998) baroreflex: heart period ([U] Eqs. 31, 33, 34, 38-42)
-# ======================================================================
-# The chain of the reflex:
-#   pressure -> afferent firing f_cs ([U] Eq. 31)
-#            -> sympathetic firing f_es ([U] Eq. 33) and vagal firing f_ev ([U] Eq. 34)
-#            -> heart period T ([U] Eqs. 38-42)
-# High pressure -> more afferent firing -> less sympathetic, more vagal firing
-#               -> longer heart period (lower heart rate). And the other way round.
-#
-# Simplifications compared with [U] (because this model goes beat by beat):
-#   - [U] uses the carotid sinus pressure, filtered by a dynamic block ([U] Eq. 30).
-#     Here the mean pressure at Rb over one beat is used, without Eq. 30.
-#   - [U] has time constants for the heart period (tau_T,s = 2 s, tau_T,v = 1.5 s, 
-#     [U] Eqs. 39 and 41). Here the static values are used directly.
-#   - The pure delays (D_T,s = 2 s, D_T,v = 0.2 s, [U] Table 3) are made by
-#     using the pressure from earlier beats (see the loop).
-
-# Parameters from [U] Table 3:
-#   Pn    : pressure at the middle of the sigmoid [mmHg]
-#   ka    : slope parameter of the sigmoid [mmHg]
-#   f_min, f_max : lower and upper saturation of the afferent firing [spikes/s]
-Pn, ka, f_min, f_max = 92, 11.758, 2.52, 47.78              # carotid afferent ([U] Eq. 31, Table 3)
-# Note: Pn is still Ursino's 92 mmHg. Earlier it was moved to 74.7 mmHg (this
-# model's resting mean pressure at Rb, without the reflex). If the baseline
-# changes, Pn can be changed here.
-f_es_inf, f_es0, k_es, f_es_min = 2.10, 16.11, 0.0675, 2.66   # sympathetic ([U] Eq. 33, Table 3)
-f_ev0, f_ev_inf, k_ev, f_cs0 = 3.2, 6.3, 7.06, 25.0           # vagal ([U] Eq. 34, Table 3)
-# CHANGED FROM [U]: G_Tv = 0.09 s/v in [U] Table 3, here 0.15 (a stronger vagal effect).
-G_Ts, G_Tv, T0 = -0.13, 0.15, 0.58                            # heart period ([U] Eqs. 38, 40, 42, Table 3)
 
 def N_ursino(P):
     """
@@ -607,30 +437,6 @@ def heart_period(P_sym,P_vag):
     dT_v = G_Tv*para_ursino(P_vag)                                        # vagal: lengthens
     return T0 + dT_s + dT_v  #? Where is the delay here?
 
-# np.trapz was renamed np.trapezoid in numpy 2.0. This line uses the new name
-# if it exists, and the old one otherwise, so the code runs on both versions.
-_trapz = getattr(np, "trapezoid", None) or np.trapz #? this seems extensive. maybe just make sure you have the right numpy
-T_beat = heart_period(Pn,Pn)       # heart period of the first beat (resting value, 1.152 s) #? so the first heartbeat is 52 bpm. We should just make this dependent on the subject. 
-
-# ======================================================================
-# Ursino (1998) baroreflex: peripheral resistance ([U] Eqs. 35-37, Table 3)
-# ======================================================================
-# In [U] the systemic circulation has two beds in parallel ([U] Fig. 1):
-# splanchnic (sp: gut, liver, spleen) and extrasplanchnic (ep: the rest).
-# The resistance of each bed follows the sympathetic firing:
-#   static curve   sigma = G*ln(f_es(t - D) - f_es_min + 1)   [U] Eq. 35
-#   low-pass       d(dR)/dt = (sigma - dR) / tau             [U] Eq. 36
-#   resistance     R = R0 + dR                               [U] Eq. 37
-# Greene's model has only one peripheral resistance RR. So the Ursino
-# resistance is not used directly: only its relative change is used, and RR
-# is scaled by it:
-#   kR = TPR(now) / TPR(rest)   and   RR = RR_base*kR
-# So kR = 1 at rest, and kR = 1.2 means 20 % more peripheral resistance.
-
-G_Rsp, Rsp0_u = 0.695, 2.49        # splanchnic gain and resistance without innervation, mmHg s/ml ([U] Table 3)
-G_Rep, Rep0_u = 0.53, 0.78         # extrasplanchnic gain and resistance without innervation, mmHg s/ml ([U] Table 3)
-tau_R, D_R = 6.0, 2.0              # time constant and pure delay, s ([U] Table 3, the same for sp and ep)
-
 def sigma_R(G, fes):
     """
         G : gain of the bed (G_Rsp or G_Rep) [mmHg*s/ml] \n
@@ -659,13 +465,7 @@ def TPR_u(dRsp, dRep):
     Rsp, Rep = Rsp0_u + dRsp, Rep0_u + dRep
     return Rsp*Rep/(Rsp + Rep)
 
-fes_ref = sym_ursino(Pn)                                       # sympathetic firing at the set point (4.67 spikes/s)
-dRsp, dRep = sigma_R(G_Rsp, fes_ref), sigma_R(G_Rep, fes_ref)  # start at the resting values (no transient at t = 0)
-TPR_ref = TPR_u(dRsp, dRep)                                    # resting Ursino TPR, the reference for kR
-RR_base = 8550*0.2                                             # resting RR. CHANGED FROM [G]: 8550 -> 8550*0.2 #? but why?
-kR = 1.0                                                       # RR scale factor used by the next beat
-fes_hist_t, fes_hist = [0.0], [fes_ref]                        # sympathetic firing history (time, value), for the delay #? i think the delay should be in samples. the model is being calculated at 1000Hz. 
-#? 200 samples for 0.2 and 3000 samples for 3. 
+
 def fes_delayed(t, D):
     """
         t : global time now [s] \n
@@ -700,20 +500,6 @@ def lag(Delta, s, T, tau): #? where does this come from?
     """
     return s + (Delta - s)*np.exp(-T/tau)
 
-
-# ======================================================================
-# Solving the equations
-# ======================================================================
-# Lists that are filled during the simulation. Each phase of each beat adds
-# one numpy array, so e.g. record_t = [times of phase 1, times of phase 2, ...].
-# load_model.py puts them together with np.concatenate.
-record_x1, record_x2, record_x3, record_x4 = [], [], [], []
-record_t, record_phase = [], []
-record_Pv, record_PA = [], []
-record_PB,record_Pdistal = [],[]
-record_P_sym, record_P_vag = [], []  # pressures used for the sympathetic and vagal part of the reflex
-record_T_beat, record_meanPB, record_beat_start = [], [], []  # one value per beat
-record_RR = []  # peripheral resistance RR of each beat
 
 def store(sol, phase, cycle_offset):
     """
@@ -762,6 +548,95 @@ def store(sol, phase, cycle_offset):
     record_Pv.append(pv_values)
     record_PA.append(pa_values)
 
+# ======================================================================
+# Heart parameters ([G] eqn 31) and the Valsalva manoeuvre
+# ======================================================================
+Rm  = 12    # mitral valve resistance, mmHg*s/l (altered from 0.33 to 12 to match the correct physiological range)
+PAS_L=5
+start_time_VM = 58.4
+end_time_VM = start_time_VM + 15
+Ra = 0.6*20
+Fix_factor_passive = 0.0045
+# ======================================================================
+# Arterial-load parameters ([G] eqn 32, circuit in [G] Fig. 2)
+# ======================================================================
+CL = 2.35e-4 * 5 # the lower it is, the more pressure in the ascending aorta, but it reduces stroke volume
+R1 = 60 *3# sets the height of the notch, and also the height of the curve.
+CR = 1.33e-4 *8# the lower it is, the more pressure in the descending aorta, but it reduces stroke volume
+R2 = 300.0*0.1 # a high value removes the notch, increases amplitude, lowers the cutting point. A 0.x value raises the cutting point, but also the pressure
+RL = 12640.0 * 0.2 # the lower it is, the more volume ejected per beat.
+Rb = 60.0 # if it increases, the pressure rises but the cut points do not.
+L  = 21.9  # inertance of the blood [mmHg*s^2/l], unchanged from [G]
+RT = R1* Ra + R1*RL + Ra*RL   # total resistance, mmHg*s/l
+h0, h1, h2 = 0.234, 147.0, 106000.0
+# ======================================================================
+# Active elastance ([G] eqns 17, 20-29) - the ventricle during systole
+# ======================================================================
+D = -150
+scale_A = 6.5
+scale_B = 0.4
+scale_C = 5.5
+
+# ======================================================================
+# The events for the sovle IVP of the four phases ([G] eqns 3-14)
+# ======================================================================
+relaxation_end_event.terminal = True
+relaxation_end_event.direction = +1 # (PAS - 0.1) - Pv goes from negative to positive when Pv becomes less than PAS
+contraction_end_event.terminal = True
+contraction_end_event.direction = -1 # PA - Pv goes from positive to negative when Pv becomes greater than PA
+ejection_end_event.terminal = True
+ejection_end_event.direction = +1 # PA - Pv goes from negative to positive when Pv becomes less than PA
+# ======================================================================
+# Ursino (1998) baroreflex: heart period ([U] Eqs. 31, 33, 34, 38-42)
+# ======================================================================
+Pn = 92
+ka = 11.758
+f_min = 2.52
+f_max = 47.78
+f_es_inf = 2.10
+f_es0 = 16.11
+k_es = 0.0675
+f_es_min = 2.66
+f_ev0 = 3.2
+f_ev_inf = 6.3 
+k_ev = 7.06 
+f_cs0 = 25.0
+G_Ts = -0.13
+G_Tv = 0.15
+T0 = 0.58 
+_trapz = getattr(np, "trapezoid", None) or np.trapz #? this seems extensive. maybe just make sure you have the right numpy
+T_beat = heart_period(Pn,Pn)       # heart period of the first beat (resting value, 1.152 s) #? so the first heartbeat is 52 bpm. We should just make this dependent on the subject. 
+
+# ======================================================================
+# Ursino (1998) baroreflex: peripheral resistance ([U] Eqs. 35-37, Table 3)
+# ======================================================================
+Rsp0_u = 2.49        # splanchnic gain and resistance without innervation, mmHg s/ml ([U] Table 3)
+G_Rsp = 0.695 
+G_Rep = 0.53         # extrasplanchnic gain and resistance without innervation, mmHg s/ml ([U] Table 3)
+Rep0_u = 0.78
+tau_R = 6.0              # time constant and pure delay, s ([U] Table 3, the same for sp and ep)
+D_R = 2.0
+
+fes_ref = sym_ursino(Pn)                                       # sympathetic firing at the set point (4.67 spikes/s)
+dRep = sigma_R(G_Rep, fes_ref)  # start at the resting values (no transient at t = 0)
+dRsp = sigma_R(G_Rsp, fes_ref)
+TPR_ref = TPR_u(dRsp, dRep)                                    # resting Ursino TPR, the reference for kR
+RR_base = 8550*0.2                                             # resting RR. CHANGED FROM [G]: 8550 -> 8550*0.2 #? but why?
+kR = 1.0                                                       # RR scale factor used by the next beat
+fes_hist_t = [0.0]                      # sympathetic firing history (time, value), for the delay #? i think the delay should be in samples. the model is being calculated at 1000Hz. 
+fes_hist = [fes_ref]
+
+# ======================================================================
+# Solving the equations
+# ======================================================================
+
+record_x1, record_x2, record_x3, record_x4 = [], [], [], []
+record_t, record_phase = [], []
+record_Pv, record_PA = [], []
+record_PB,record_Pdistal = [],[]
+record_P_sym, record_P_vag = [], []  # pressures used for the sympathetic and vagal part of the reflex
+record_T_beat, record_meanPB, record_beat_start = [], [], []  # one value per beat
+record_RR = []  # peripheral resistance RR of each beat
 
 # solve_ivp settings
 t_span = (0, 1)   # A maximal cutoff for every phase (this should never be reached, the events stop it first)
@@ -774,6 +649,11 @@ cycle_offset = 0  # global time when the current beat starts [s]
 n_beats = 180  # number of heart beats to simulate. 180 beats at about 1 s cover the whole measurement
 record_PAS = []  # atrial source pressure at the start of each beat
 P_reflex = Pn    # pressure the reflex sees, used by E_H. Starts at the set point #? constant = constant. we should just use it
+
+t_segments = []
+# ======================================================================
+# Main model running
+# ======================================================================
 
 for i in range(n_beats): # one heart beat per loop
     #print(f"Cycle {i+1}")
@@ -889,8 +769,6 @@ for i in range(n_beats): # one heart beat per loop
     # end time of the beat = the length of the beat
     cycle_offset += sol_filling.t[-1]
 
-# Making the time axis
-t_segments = []
 for t in record_t:
     t_segments.append(t)
 
