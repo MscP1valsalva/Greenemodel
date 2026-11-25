@@ -36,7 +36,11 @@ from scipy.signal import butter, filtfilt, find_peaks
 # Building the path from this file's location means the code works no matter
 # which folder you run it from.
 DATA_DIR = Path(__file__).resolve().parent / "DataFolder" # this is just a way for us to run the code independenly
-                                                          # so we dont have to change the path everytime a different person tries to run it 
+                                                          # so we dont have to change the path everytime a different person tries to run it
+
+# Number of beats that heart rate and MAP are averaged over in the plots.
+# preprocessing.py and model_validation.py both use this, so change it only here
+BEAT_WINDOW = 6
 
 
 def load_data(file_name, fs):
@@ -133,41 +137,50 @@ def ecg_processing(signal, fs):
     return filtered_signal
 
 
-def normal_beats(peaks):
+def normal_beats(signal, peaks, fs):
     """
+        signal : blood pressure signal (numpy array) \n
         peaks : sample numbers of the systolic peaks (numpy array) \n
+        fs : sampling frequency of the recording [Hz] (float) \n
 
         Finds out which beat intervals are normal heartbeats and which ones span
         a Finapres calibration.
 
-        The Finapres calibrates itself every so often. Then the curve goes flat
-        for a few seconds and no beats are visible, so the interval between the
-        peak before and the peak after is far too long to be one heartbeat.
+        During a calibration the Finapres holds the curve flat for a few seconds.
+        A beating heart never does that, so the rule is:
+        an interval spans a calibration if the pressure stays within 2 mmHg for
+        0.5 s somewhere inside it.
 
-        Rule: compare each interval with the typical interval of the 9 intervals
-        around it (the median, which is not thrown off by one odd value). An
-        interval that is more than 1.5 times as long spans a calibration.
-
-        Example:
-            intervals = 1.45  1.52  1.43  1.34  [4.27]  1.40  1.39  1.38  1.37
-            typical for [4.27] = 1.40, limit = 1.5 x 1.40 = 2.10
-            4.27 > 2.10, so [4.27] spans a calibration -> False
+        (The old rule, "longer than 1.5x the beats around it", also flagged the
+        quick drop in heart rate in phase IV of the Valsalva manoeuvre.)
 
         This rule is used by systolic_blood_peaks, mean_artial_pressure and
-        valid_samples (in model_validation.py), so change 9 and 1.5 only here.
+        valid_samples (in model_validation.py), so change 0.5 and 2 only here.
 
         Returns a True/False array with one value per interval (one shorter
         than peaks): True = normal beat, False = spans a calibration.
     """
-    # Number of samples between each pair of neighbouring peaks
-    rr = np.diff(peaks)
+    flat_time = 0.5     # [s]
+    flat_range = 2.0    # [mmHg]
+    n = int(flat_time * fs)
 
-    # Typical interval around each beat: the median of a window of 9 intervals.
-    # center=True: 4 before, the interval itself and 4 after.
-    # min_periods=1: also works at the start and end, where the window is smaller
-    typical = pd.Series(rr).rolling(9, center=True, min_periods=1).median().to_numpy()
+    # For every sample: highest minus lowest value of the last n samples
+    s = pd.Series(signal)
+    window_range = (s.rolling(n).max() - s.rolling(n).min()).to_numpy()
+    flat = window_range < flat_range          # True where the last 0.5 s were flat
 
-    return rr < 1.5 * typical
+    # flat_count[k] = number of flat windows ending before sample k.
+    # The number of flat windows inside an interval a..b is then
+    # flat_count[b] - flat_count[a + n] (windows that lie completely inside it)
+    flat_count = np.concatenate([[0], np.cumsum(flat)])
+
+    normal = []
+    for a, b in zip(peaks[:-1], peaks[1:]):
+        if b > a + n:
+            normal.append(flat_count[b] - flat_count[a + n] == 0)
+        else:
+            normal.append(True)               # shorter than 0.5 s: can't be flat
+    return np.array(normal, dtype=bool)
 
 
 def systolic_blood_peaks(signal, fs):
@@ -206,24 +219,29 @@ def systolic_blood_peaks(signal, fs):
     # --- Step 3: keep only the real heartbeats ---
     # A real systolic peak stands out by a large part of the local pulse. The
     # small bump after each peak (the dicrotic notch) does not.
-    # Keep the peaks whose prominence is at least 30 % of the local pulse.
-    keep = props["prominences"] >= 0.3 * local_pulse[peaks]
+    # Keep the peaks whose prominence is at least 30 % of the local pulse,
+    # OR at least 15 mmHg. The second part is needed in phase III of the
+    # Valsalva manoeuvre: the beats are small there, but the 4 s window already
+    # reaches the big beats of phase IV, so 30 % of it would be too much
+    prom = props["prominences"]
+    keep = (prom >= 0.3 * local_pulse[peaks]) | (prom >= 15)
     peaks = peaks[keep]
 
     # --- Step 4: time between beats ---
     # np.diff gives the number of samples between each pair of neighbouring
     # peaks. Dividing by fs turns it into seconds.
-    # [normal_beats(peaks)] then drops the intervals that span a Finapres
+    # [normal_beats(...)] then drops the intervals that span a Finapres
     # calibration (see normal_beats), because they are not one real heartbeat
-    rr = (np.diff(peaks) / fs)[normal_beats(peaks)]
+    rr = (np.diff(peaks) / fs)[normal_beats(signal, peaks, fs)]
 
     return peaks, rr
 
 
-def mean_artial_pressure(signal, peaks):
+def mean_artial_pressure(signal, peaks, fs):
     """
         signal : blood pressure signal (numpy array) \n
         peaks : sample numbers of the systolic peaks, from systolic_blood_peaks \n
+        fs : sampling frequency of the recording [Hz] (float) \n
 
         Calculates the mean arterial pressure (MAP) of each heartbeat: the
         average of all the samples between one systolic peak and the next.
@@ -239,7 +257,7 @@ def mean_artial_pressure(signal, peaks):
                    Use t[beat_end] to get the time of each MAP value.
 
         Beats that span a Finapres calibration are skipped, with the same rule as
-        in systolic_blood_peaks (longer than 1.5x the typical beat around it).
+        in systolic_blood_peaks (the curve goes flat inside the beat, see normal_beats).
         Because of that, map_beat can be shorter than peaks.
     """
     # --- Step 1: find the beats that span a calibration ---
@@ -247,7 +265,7 @@ def mean_artial_pressure(signal, peaks):
     # "beat" across it is much too long and its average would be meaningless.
     # normal_beat is a True/False array (see normal_beats):
     # True = normal beat, False = spans a calibration
-    normal_beat = normal_beats(peaks)
+    normal_beat = normal_beats(signal, peaks, fs)
 
     # --- Step 2: start and end sample of every normal beat ---
     # peaks[:-1] is every peak except the last  -> the start of each beat
@@ -349,10 +367,13 @@ if __name__ == "__main__":
     # This part only runs when you run this file directly, not when another
     # file imports functions from it
     import matplotlib.pyplot as plt
+    from model_validation import valsalva_phases, VM_START
 
+    VM_START = 60
     fs = 100                  # sampling frequency of the measurements [Hz]
     adc_finapres = 100        # Finapres conversion: 1 V in the file = 100 mmHg
     V_mV_conversion = 1000    # 1 V = 1000 mV
+    fontsize = 15
 
     while True:
         # Let the user choose a measurement file. None means they typed q
@@ -373,15 +394,15 @@ if __name__ == "__main__":
         bp = df["Sys BP"].to_numpy() * adc_finapres               # [V] -> [mmHg]
         bp_peaks, rr = systolic_blood_peaks(bp, fs)
         heart_rate = np.array(60 / rr)       # heart rate for each beat [bpm] (60 s / time per beat)
-        map_beat, beat_end = mean_artial_pressure(bp, bp_peaks)
+        map_beat, beat_end = mean_artial_pressure(bp, bp_peaks, fs)
 
         # Heart rate and MAP skip exactly the same calibration beats (same 1.5x
         # rule), so value k of both belongs to the same beat, and t[beat_end]
         # is the time of each value for both
 
-        # --- Smooth heart rate and MAP: average over 5 beats ---
-        heart_rate_smooth = beat_averge(3, heart_rate)
-        map_smooth = beat_averge(3, map_beat)
+        # --- Smooth heart rate and MAP: average over BEAT_WINDOW beats ---
+        heart_rate_smooth = beat_averge(BEAT_WINDOW, heart_rate)
+        map_smooth = beat_averge(BEAT_WINDOW, map_beat)
 
         # --- Filter the ECG signals ---
         # Lead I is multiplied by -1 (flipped upside down) so its R-peaks point up
@@ -392,21 +413,39 @@ if __name__ == "__main__":
         # sharex=True: zooming in one plot zooms in all three
         linewidth = 0.5
         fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True)
-        fig.suptitle(name.rsplit(".", 1)[0])
+        #fig.suptitle(name.rsplit(".", 1)[0])
 
-        ax1.plot(t, bp, linewidth=linewidth, label = "Blood Pressure")
-        ax1.plot(t[bp_peaks], bp[bp_peaks], "x")
-        ax1.set_ylabel("Blood Pressure (mmHg)")
-        ax1.plot(t[beat_end], map_smooth, label = "Mean Arterial Pressure", linewidth = 1.5)        
+        ax1.plot(t, bp, linewidth=linewidth)
+        #ax1.plot(t[bp_peaks], bp[bp_peaks], "x")
+        ax1.set_ylabel("BP(mmHg)",  fontsize = fontsize)
+        ax1.set_xlim(50, 120)
+        ax1.plot(t[beat_end], map_smooth, 'r',  label = "MAP", linewidth = 2)
 
-        ax2.plot(t[beat_end], heart_rate_smooth, label = "Heart Rate", linewidth = linewidth)
-        ax2.set_ylabel("Heart rate (bpm)")
-        ax2.set_xlabel("Time [s]")
+        ax2.plot(t[beat_end], heart_rate_smooth, 'g', label = "HR", linewidth = 2)
+        ax2.set_ylabel("HR (bpm)",  fontsize = fontsize)
+        ax2.set_xlabel("Time [s]",  fontsize = fontsize)
         ax2.set_ylim(30, 200)
-        
 
-        ax1.legend(loc="upper right")
-        ax2.legend(loc="upper right")
+        # --- Valsalva phases: one coloured band per phase in both plots ---
+        # valsalva_phases gives (name, start [s], end [s]) for phase I, II, III, IV
+        phases = valsalva_phases(VM_START)
+        for ax in (ax1, ax2):
+            for i, (label, start, end) in enumerate(phases):
+                ax.axvspan(start, end, color=f"C{i + 2}", alpha=0.15, linewidth=0)
+
+        # Write I, II, III, IV in the middle of each band, near the top of the BP plot.
+        # get_xaxis_transform(): x in seconds, y from 0 (bottom) to 1 (top)
+        for label, start, end in phases:
+            ax1.text((start + end) / 2, 0.97, label, transform=ax1.get_xaxis_transform(),
+                     ha="center", va="top", fontsize=fontsize, fontweight="bold")
+
+        ax1.legend(loc="upper right", fontsize=fontsize)
+       # ax2.legend(loc="upper right", fontsize=fontsize)
+
+        # The numbers on the axes, same size as the rest
+        ax1.tick_params(labelsize=fontsize)
+        ax2.tick_params(labelsize=fontsize)
         # plt.show() waits here until you close the figure window,
         # then the loop starts again and you can choose a new subject
+        fig.savefig("VM_messuremtn.png", dpi=300)
         plt.show()
