@@ -534,7 +534,7 @@ def store(sol, phase, cycle_offset):
 # ======================================================================
 Rm  = 12    # mitral valve resistance, mmHg*s/l (altered from 0.33 to 12 to match the correct physiological range)
 PAS_L=5
-start_time_VM = 40
+start_time_VM = 60
 end_time_VM = start_time_VM + 15
 Ra = 0.6*20
 Fix_factor_passive = 0.0045
@@ -627,7 +627,7 @@ cycle_offset = 0  # global time when the current beat starts [s]
 
 #PAS_base, PAS_low = 10.0, 6.0          # mmHg
 #pert_beats = range(8, 18)              # beats 9-18 (0-based index)
-n_beats = 100  # number of heart beats to simulate. 180 beats at about 1 s cover the whole measurement
+n_beats = 180  # number of heart beats to simulate. 180 beats at about 1 s cover the whole measurement
 record_PAS = []  # atrial source pressure at the start of each beat
 P_reflex = Pn    # pressure the reflex sees, used by E_H. Starts at the set point #? constant = constant. we should just use it
 
@@ -784,16 +784,17 @@ if __name__ == "__main__":
     heart_rate = 60 / np.array(record_T_beat)          # [bpm]
 
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, sharex=True)
-    linewidth = 0.5
+    linewidth_top = 0.5
+    linewidth_bottom = 2
 
-    ax1.plot(t_all, pa_all, linewidth=linewidth, label="PA (aortic root)")
-    ax1.plot(beat_start, record_meanPB, ".-", linewidth=linewidth, label="mean PB per beat")
+    ax1.plot(t_all, pa_all, linewidth=linewidth_top, label="PA (aortic root)")
+    ax1.plot(beat_start, record_meanPB, ".-", linewidth=linewidth_top, label="mean PB per beat")
     ax1.set_ylabel("Pressure [mmHg]")
 
-    ax2.plot(beat_start, heart_rate, ".-", linewidth=linewidth)
+    ax2.plot(beat_start, heart_rate, ".-", linewidth=linewidth_bottom)
     ax2.set_ylabel("Heart rate [bpm]")
 
-    ax3.plot(beat_start, record_RR, ".-", linewidth=linewidth)
+    ax3.plot(beat_start, record_RR, ".-", linewidth=linewidth_bottom)
     ax3.set_ylabel("RR [mmHg*s/l]")
     ax3.set_xlabel("Time [s]")
 
@@ -806,127 +807,127 @@ if __name__ == "__main__":
     plt.show()
     fig, axs = plt.subplots(2, 2, figsize=(10, 6))
 
-titles  = ["x1: pressure across $C_R$ (descending & abdominal aorta)", "x2: ventricular volume",
-           "x3: pressure across $C_L$ (ascending aorta)", "x4: flow through $L$"]
-ylabels = ["Pressure (mmHg)", "Volume (L)", "Pressure (mmHg)", "Flow (L/s)"]
-data    = [record_x1, record_x2, record_x3, record_x4]
+    titles  = ["x1: pressure across $C_R$ (descending & abdominal aorta)", "x2: ventricular volume",
+               "x3: pressure across $C_L$ (ascending aorta)", "x4: flow through $L$"]
+    ylabels = ["Pressure (mmHg)", "Volume (L)", "Pressure (mmHg)", "Flow (L/s)"]
+    data    = [record_x1, record_x2, record_x3, record_x4]
 
-for ax, title, ylabel, values in zip(axs.flat, titles, ylabels, data):
-    for t, y, phase in zip(t_segments, values, record_phase):
-        ax.plot(t, y, color=PHASE_COLORS[phase], lw=1)
-    ax.set_title(title)
+    for ax, title, ylabel, values in zip(axs.flat, titles, ylabels, data):
+        for t, y, phase in zip(t_segments, values, record_phase):
+            ax.plot(t, y, color=PHASE_COLORS[phase], lw=1)
+        ax.set_title(title)
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel(ylabel)
+        ax.grid(True, color="#e1e0d9")
+
+    plt.tight_layout(rect=[0, 0, 1, 0.93]) 
+
+    handles = [plt.Line2D([0], [0], color=PHASE_COLORS[p], lw=2, label=PHASE_LABELS[p])
+               for p in ["contraction", "ejection", "relaxation", "filling"]]
+    fig.legend(handles=handles, loc="upper center", ncol=4, bbox_to_anchor=(0.5, 1.0))
+
+    # --------- Plotting the Ventricular and Aortic pressures ---------
+
+    fig_pressure, ax = plt.subplots(figsize=(10, 6))
+
+    for t, pv_values, pa_values, x4, phase in zip(
+        t_segments, record_Pv, record_PA, record_x4, record_phase
+    ):
+        ax.plot(t, pa_values, "r--", lw=1.5, zorder=3)
+        ax.plot(t, pv_values, color=PHASE_COLORS[phase], lw=1)
+
+    ax.step(record_beat_start, record_PAS, where="post", color="k", lw=1.5, zorder=2)
+    ax.set_title("Ventricular and aortic pressure")
     ax.set_xlabel("Time (s)")
-    ax.set_ylabel(ylabel)
-    ax.grid(True, color="#e1e0d9")
+    ax.set_ylabel("Pressure [mmHg]")
+    ax.grid(True)
 
-plt.tight_layout(rect=[0, 0, 1, 0.93]) 
+    plt.tight_layout(rect=[0, 0, 1, 0.9])
 
-handles = [plt.Line2D([0], [0], color=PHASE_COLORS[p], lw=2, label=PHASE_LABELS[p])
-           for p in ["contraction", "ejection", "relaxation", "filling"]]
-fig.legend(handles=handles, loc="upper center", ncol=4, bbox_to_anchor=(0.5, 1.0))
+    handles = [
+        plt.Line2D([0], [0], color=PHASE_COLORS[p], lw=2, label=PHASE_LABELS[p])
+        for p in ["contraction", "ejection", "relaxation", "filling"]
+    ]
+    handles.append(plt.Line2D([0], [0], color="red", lw=2, label="Aortic pressure"))
+    handles.append(plt.Line2D([0], [0], color="black", lw=2, label="PAS"))
+    # ax.legend(handles=handles)
+    fig_pressure.legend(handles=handles, loc="upper center", ncol=5, bbox_to_anchor=(0.5, 1.0))
+                  
+    # --------- Plotting the P-V diagram ---------
 
-# --------- Plotting the Ventricular and Aortic pressures ---------
+    fig_pv, ax = plt.subplots(figsize=(10, 6))
 
-fig_pressure, ax = plt.subplots(figsize=(10, 6))
+    for x2_values, pv_values, phase in zip(
+        record_x2, record_Pv, record_phase
+    ):
+        ax.plot(x2_values, pv_values, color=PHASE_COLORS[phase], lw=1)
 
-for t, pv_values, pa_values, x4, phase in zip(
-    t_segments, record_Pv, record_PA, record_x4, record_phase
-):
-    ax.plot(t, pa_values, "r--", lw=1.5, zorder=3)
-    ax.plot(t, pv_values, color=PHASE_COLORS[phase], lw=1)
+    ax.set_title("Pressure-Volume diagram")
+    ax.set_xlabel("Ventricular volume (l)")
+    ax.set_ylabel("Ventricular pressure [mmHg]")
+    ax.grid(True)
 
-ax.step(record_beat_start, record_PAS, where="post", color="k", lw=1.5, zorder=2)
-ax.set_title("Ventricular and aortic pressure")
-ax.set_xlabel("Time (s)")
-ax.set_ylabel("Pressure [mmHg]")
-ax.grid(True)
+    plt.tight_layout(rect=[0, 0, 1, 0.93]) 
 
-plt.tight_layout(rect=[0, 0, 1, 0.9])
+    handles = [plt.Line2D([0], [0], color=PHASE_COLORS[p], lw=2, label=PHASE_LABELS[p])
+               for p in ["contraction", "ejection", "relaxation", "filling"]]
+    fig_pv.legend(handles=handles, loc="upper center", ncol=4, bbox_to_anchor=(0.5, 1.0))
 
-handles = [
-    plt.Line2D([0], [0], color=PHASE_COLORS[p], lw=2, label=PHASE_LABELS[p])
-    for p in ["contraction", "ejection", "relaxation", "filling"]
-]
-handles.append(plt.Line2D([0], [0], color="red", lw=2, label="Aortic pressure"))
-handles.append(plt.Line2D([0], [0], color="black", lw=2, label="PAS"))
-# ax.legend(handles=handles)
-fig_pressure.legend(handles=handles, loc="upper center", ncol=5, bbox_to_anchor=(0.5, 1.0))
-              
-# --------- Plotting the P-V diagram ---------
+    fig, ax = plt.subplots(figsize=(10,6))
 
-fig_pv, ax = plt.subplots(figsize=(10, 6))
+    for t, dp, phase in zip(
+            t_segments,
+            record_PB,
+            record_phase):
 
-for x2_values, pv_values, phase in zip(
-    record_x2, record_Pv, record_phase
-):
-    ax.plot(x2_values, pv_values, color=PHASE_COLORS[phase], lw=1)
+        ax.plot(t, dp,
+                color=PHASE_COLORS[phase])
 
-ax.set_title("Pressure-Volume diagram")
-ax.set_xlabel("Ventricular volume (l)")
-ax.set_ylabel("Ventricular pressure [mmHg]")
-ax.grid(True)
+    ax.set_title("Pressure drop across RB")
+    ax.set_xlabel("Time [s]")
+    ax.set_ylabel("ΔP [mmHg]")
+    ax.grid(True)
 
-plt.tight_layout(rect=[0, 0, 1, 0.93]) 
+    # pulsen gemmen hele systemet 
+    Puls= np.concatenate(record_PB)
+    print("Mean pressure drop across RB: ", np.mean(Puls), "mmHg")
 
-handles = [plt.Line2D([0], [0], color=PHASE_COLORS[p], lw=2, label=PHASE_LABELS[p])
-           for p in ["contraction", "ejection", "relaxation", "filling"]]
-fig_pv.legend(handles=handles, loc="upper center", ncol=4, bbox_to_anchor=(0.5, 1.0))
+    record_T_beat = np.asarray(record_T_beat)
+    fig_u, axu = plt.subplots(4, 1, figsize=(9, 10), sharex=True)
 
-fig, ax = plt.subplots(figsize=(10,6))
+    # Mean pressure
+    axu[0].plot(record_beat_start, record_meanPB, "o-b")
+    axu[0].set_ylabel("Mean P (mmHg)")
+    axu[0].grid(True)
 
-for t, dp, phase in zip(
-        t_segments,
-        record_PB,
-        record_phase):
+    # Sympatisk og vagal aktivitet
+    axu[1].plot(record_beat_start, record_P_sym,
+                "o-r", label="Sympathetic")
+    axu[1].plot(record_beat_start, record_P_vag,
+                "o-g", label="Vagal")
+    axu[1].set_ylabel("Firing rate")
+    axu[1].legend()
+    axu[1].grid(True)
 
-    ax.plot(t, dp,
-            color=PHASE_COLORS[phase])
+    # HR
+    axu[2].plot(record_beat_start, 60/record_T_beat,
+                "o-k")
+    axu[2].set_ylabel("HR (bpm)")
+    axu[2].grid(True)
 
-ax.set_title("Pressure drop across RB")
-ax.set_xlabel("Time [s]")
-ax.set_ylabel("ΔP [mmHg]")
-ax.grid(True)
+    # PAS-ændring
+    axu[3].step(record_beat_start,
+                record_PAS,
+                where="post",
+                color="purple")
+    axu[3].set_ylabel("PAS (mmHg)")
+    axu[3].set_xlabel("Time (s)")
+    axu[3].grid(True)
+    axu[0].set_title("Baroreflex response")
 
-# pulsen gemmen hele systemet 
-Puls= np.concatenate(record_PB)
-print("Mean pressure drop across RB: ", np.mean(Puls), "mmHg")
-
-record_T_beat = np.asarray(record_T_beat)
-fig_u, axu = plt.subplots(4, 1, figsize=(9, 10), sharex=True)
-
-# Mean pressure
-axu[0].plot(record_beat_start, record_meanPB, "o-b")
-axu[0].set_ylabel("Mean P (mmHg)")
-axu[0].grid(True)
-
-# Sympatisk og vagal aktivitet
-axu[1].plot(record_beat_start, record_P_sym,
-            "o-r", label="Sympathetic")
-axu[1].plot(record_beat_start, record_P_vag,
-            "o-g", label="Vagal")
-axu[1].set_ylabel("Firing rate")
-axu[1].legend()
-axu[1].grid(True)
-
-# HR
-axu[2].plot(record_beat_start, 60/record_T_beat,
-            "o-k")
-axu[2].set_ylabel("HR (bpm)")
-axu[2].grid(True)
-
-# PAS-ændring
-axu[3].step(record_beat_start,
-            record_PAS,
-            where="post",
-            color="purple")
-axu[3].set_ylabel("PAS (mmHg)")
-axu[3].set_xlabel("Time (s)")
-axu[3].grid(True)
-axu[0].set_title("Baroreflex response")
-
-fig_u.tight_layout()
-fig_u.savefig("greene_ursino_HR.png", dpi=150)
-plt.show()
+    fig_u.tight_layout()
+    fig_u.savefig("greene_ursino_HR.png", dpi=150)
+    plt.show()
 """
 record_meanPB = np.array(record_meanPB)
 record_T_beat = np.array(record_T_beat)

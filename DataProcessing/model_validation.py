@@ -29,13 +29,14 @@ from matplotlib import pyplot as plt
 
 from load_model import run_greene_model, sample
 from preprocessing import (DATA_DIR, load_data, systolic_blood_peaks, choose_subject,
-                           mean_artial_pressure, normal_beats)
+                           mean_artial_pressure, normal_beats, beat_averge, BEAT_WINDOW)
 
 
-def valid_samples(bp_peaks, n):
+def valid_samples(signal, bp_peaks, fs):
     """
+        signal : the measured blood pressure (numpy array) \n
         bp_peaks : sample numbers of the measured systolic peaks (numpy array) \n
-        n : number of samples in the measurement of the systolic peaks \n
+        fs : sampling frequency [Hz] \n
 
         This function returns a True/False array with one value per sample:
         True = the sample can be compared, False = leave it out so that we don't compare the model with
@@ -44,19 +45,14 @@ def valid_samples(bp_peaks, n):
         Left out are:
           - the samples before the first peak and after the last peak
           - every beat interval that spans a Finapres calibration. During a
-            calibration the curve goes flat for a few seconds, so the interval
-            between the peaks on each side is much longer than a normal beat.
-            The rule for this is in normal_beats (preprocessing.py): longer than 1.5
-            times the typical interval of the 9 beats around it.
-
-            Example:
-            1.45  1.52  1.43  1.34  [4.27]  1.40  1.39  1.38  1.37
-            the [4.27] is the calibration because it is much longer than the 8 beats surrounding it. This is then flagged as false
-
-            note:
-            We might need to change the amounts of peak intervals we look at and how much longer it is because of the rapid change in VM.
-            That is done in normal_beats, and then it changes everywhere.
+            calibration the curve goes flat for a few seconds.
+            The rule for this is in normal_beats (preprocessing.py): the pressure
+            stays within 2 mmHg for 0.5 s somewhere inside the interval.
+            (The old rule, "longer than 1.5x the beats around it", also flagged
+            the quick drop in heart rate in phase IV of the Valsalva manoeuvre.)
+            Change the rule in normal_beats, and it changes everywhere.
     """
+    n = len(signal)
     valid = np.zeros(n, dtype=bool)   # start with every sample set to False (not used)
 
     # Go through the beats one by one. For each beat:
@@ -64,7 +60,7 @@ def valid_samples(bp_peaks, n):
     #   b  = sample of the next peak
     #   ok = True if the interval is a normal beat, False if it spans a calibration
     # Then set all samples from a up to b to ok
-    for a, b, ok in zip(bp_peaks[:-1], bp_peaks[1:], normal_beats(bp_peaks)):
+    for a, b, ok in zip(bp_peaks[:-1], bp_peaks[1:], normal_beats(signal, bp_peaks, fs)):
         valid[a:b] = ok
 
     return valid
@@ -99,11 +95,13 @@ def compare(measured, model, valid):
     return r, rmse
 
 
-def map_curve(signal, peaks, t):
+def map_curve(signal, peaks, t, fs, window=1):
     """
         signal : blood pressure (numpy array) \n
         peaks : sample numbers of the systolic peaks (numpy array) \n
         t : time axis of the signal [s] (numpy array) \n
+        fs : sampling frequency [Hz] \n
+        window : number of beats to average over (beat_averge), 1 = no averaging \n
 
         Calculates the MAP of each beat (mean_artial_pressure) and turns it into
         a curve with one value per sample.
@@ -118,10 +116,32 @@ def map_curve(signal, peaks, t):
         Returns the MAP curve [mmHg], with the same length as t.
     """
     # One MAP value per beat, and the sample where each beat ends
-    map_beat, beat_end = mean_artial_pressure(signal, peaks)
+    map_beat, beat_end = mean_artial_pressure(signal, peaks, fs)
+    map_beat = beat_averge(window, map_beat)       # average over `window` beats
 
     # t[beat_end] is the time of each MAP value
     return np.interp(t, t[beat_end], map_beat)
+
+
+def heart_rate_curve(signal, peaks, t, fs, window=1):
+    """
+        signal : blood pressure (numpy array) \n
+        peaks : sample numbers of the systolic peaks (numpy array) \n
+        t : time axis of the signal [s] (numpy array) \n
+        fs : sampling frequency [Hz] \n
+        window : number of beats to average over (beat_averge), 1 = no averaging \n
+
+        The heart rate of each beat (60 / time between two peaks), turned into a
+        curve with one value per sample, the same way as map_curve.
+        Beats that span a Finapres calibration are skipped (normal_beats).
+
+        Returns the heart rate curve [bpm], with the same length as t.
+    """
+    normal = normal_beats(signal, peaks, fs)
+    rr = np.diff(peaks)[normal] / fs              # time per beat [s]
+    beat_end = peaks[1:][normal]                  # each beat ends at the next peak
+    hr = beat_averge(window, 60 / rr)             # average over `window` beats
+    return np.interp(t, t[beat_end], hr)
 
 
 def compare_all_subjects(pa_model, fs, adc_finapres):
@@ -144,7 +164,8 @@ def compare_all_subjects(pa_model, fs, adc_finapres):
         curves : a dictionary with the curves of each subject, so they can be
                  plotted later without calculating them again, e.g.
                  curves["subj 2.1"]["t"] is the time axis of subj 2.1.
-                 The keys inside are: t, bp, pa, map_measurement, map_model, valid
+                 The keys inside are: t, bp, pa, map_measurement, map_model,
+                 hr_measurement, hr_model, valid
     """
     # The model is the same for every subject, so find its peaks only once
     model_peaks, _ = systolic_blood_peaks(pa_model, fs)
@@ -176,13 +197,13 @@ def compare_all_subjects(pa_model, fs, adc_finapres):
         model_peaks_cut = model_peaks[model_peaks < n]
 
         # --- Compare the blood pressure curves ---
-        valid = valid_samples(bp_peaks_cut, n)
+        valid = valid_samples(bp_cut, bp_peaks_cut, fs)
         r, rmse = compare(bp_cut, pa_cut, valid)
 
         # --- Compare MAP ---
         # Same function and the same valid samples as for the blood pressure curves
-        map_measurement = map_curve(bp_cut, bp_peaks_cut, t)
-        map_model = map_curve(pa_cut, model_peaks_cut, t)
+        map_measurement = map_curve(bp_cut, bp_peaks_cut, t, fs)
+        map_model = map_curve(pa_cut, model_peaks_cut, t, fs)
         r_map, rmse_map = compare(map_measurement, map_model, valid)
 
         # --- Save the numbers of this subject (one row of the table) ---
@@ -202,8 +223,12 @@ def compare_all_subjects(pa_model, fs, adc_finapres):
             "t": t,
             "bp": bp_cut,
             "pa": pa_cut,
-            "map_measurement": map_measurement,
-            "map_model": map_model,
+            # The plotted MAP and HR are averaged over BEAT_WINDOW beats, the same
+            # as in preprocessing.py. The comparison above uses the un-averaged MAP
+            "map_measurement": map_curve(bp_cut, bp_peaks_cut, t, fs, BEAT_WINDOW),
+            "map_model": map_curve(pa_cut, model_peaks_cut, t, fs, BEAT_WINDOW),
+            "hr_measurement": heart_rate_curve(bp_cut, bp_peaks_cut, t, fs, BEAT_WINDOW),
+            "hr_model": heart_rate_curve(pa_cut, model_peaks_cut, t, fs, BEAT_WINDOW),
             "valid": valid,
         }
 
@@ -233,7 +258,7 @@ def per_subject(table):
 
 
 # Time [s] where the strain (the Valsalva manoeuvre) starts
-VM_START = 58.4
+VM_START = 60
 
 # Typical length of each phase [s] for a 15 s strain (I + II = the strain)
 PHASE_DURATIONS = {"I": 3, "II": 13, "III": 3, "IV": 10}
@@ -255,60 +280,78 @@ def valsalva_phases(start, durations=PHASE_DURATIONS):
     return phases
 
 
-def plot_subject(name, c, vm_start=VM_START):
+def plot_subject(name, c, vm_start=VM_START, fontsize=15, figsize=(7, 10)):
     """
         name : subject name, used as the title (string) \n
         c : the curves of this subject, e.g. curves["subj 2.1"] from compare_all_subjects \n
         vm_start : time [s] where the strain starts, used to draw the Valsalva phases \n
+        fontsize : size of all the text in the figure \n
+        figsize : (width, height) of the figure [inches] \n
 
-        Two plots above each other with a shared time axis:
-        Top: the blood pressure curves, to see the shape of the beats.
-        Bottom: the MAP with its own y-axis, so its slow changes are visible
-        (in the top plot they would look flat next to the big pulses).
-        The samples that were left out (calibrations) are grey in both.
+        Three plots above each other with a shared time axis:
+        (a): the blood pressure curves, to see the shape of the beats.
+        (b): the MAP with its own y-axis, so its slow changes are visible
+             (in the top plot they would look flat next to the big pulses).
+        (c): the heart rate.
+        The samples that were left out (calibrations) are grey in all three.
+        One legend for the whole figure sits above plot (a).
     """
-    # sharex=True: zooming in one plot zooms in both
-    # figsize = (width, height) of the window in inches
-    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True)
-    #fig.suptitle(name)
+    # sharex=True: zooming in one plot zooms in all three
+    # figsize = (width, height) of the figure in inches
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, sharex=True, figsize=figsize)
     linewidth = 0.5
+    linewidth_bottom = 2
     ax1.set_xlim((50, 100))
     phases = valsalva_phases(vm_start)
 
     ax1.plot(c["t"], c["bp"], linewidth=linewidth, label="Measurement")
     ax1.plot(c["t"], c["pa"], linewidth=linewidth, label="Model")
-    ax1.set_ylabel("Blood pressure [mmHg]")
-    ax1.set_title("(a)")
+    ax1.set_ylabel("BP [mmHg]", fontsize=fontsize)
+    ax1.set_title("(a)", fontsize=fontsize)
 
-    ax2.plot(c["t"], c["map_measurement"], linewidth=linewidth, label="Measurement")
-    ax2.plot(c["t"], c["map_model"], linewidth=linewidth, label="Model")
-    ax2.set_ylabel("MAP [mmHg]")
-    ax2.set_xlabel("Time [s]")
-    ax2.set_title("(b)")
+    ax2.plot(c["t"], c["map_measurement"], linewidth=linewidth_bottom)
+    ax2.plot(c["t"], c["map_model"], linewidth=linewidth_bottom)
+    ax2.set_ylabel("MAP [mmHg]", fontsize=fontsize)
+    ax2.set_title("(b)", fontsize=fontsize)
 
-    for ax in (ax1, ax2):
+    ax3.plot(c["t"], c["hr_measurement"], linewidth=linewidth_bottom)
+    ax3.plot(c["t"], c["hr_model"], linewidth=linewidth_bottom)
+    ax3.set_ylabel("HR [bpm]", fontsize=fontsize)
+    ax3.set_xlabel("Time [s]", fontsize=fontsize)
+    ax3.set_title("(c)", fontsize=fontsize)
+
+    for ax in (ax1, ax2, ax3):
         # Grey areas where valid is False (~ means "not"): the samples left out.
         # transform=get_xaxis_transform() makes the grey area go from the bottom
         # (0) to the top (1) of each plot, whatever the y-values are
-        ax.fill_between(c["t"], 0, 1, where=~c["valid"], color="grey", alpha=0.3,
+        ax.fill_between(c["t"], 0, 1, where=~c["valid"], color="r", alpha=0.3,
                         transform=ax.get_xaxis_transform(), label="Calibration")
 
         # One lightly coloured band per Valsalva phase, full height of the plot
         for i, (label, start, end) in enumerate(phases):
             ax.axvspan(start, end, color=f"C{i + 2}", alpha=0.15, linewidth=0)
 
-        # Put the legend just to the right of the plot, so it doesn't cover
-        # the curves. (1.01, 0.5) = just past the right edge, halfway up
-        ax.legend(loc="upper right", fontsize = 8)
+        # The numbers on the axes, same size as the rest
+        ax.tick_params(labelsize=fontsize)
 
     # Write I, II, III, IV centred in each band, near the top of plot (a).
     # get_xaxis_transform(): x in seconds, y from 0 (bottom) to 1 (top)
     for label, start, end in phases:
         ax1.text((start + end) / 2, 0.97, label, transform=ax1.get_xaxis_transform(),
-                 ha="center", va="top", fontsize=9, fontweight="bold")
+                 ha="center", va="top", fontsize=fontsize, fontweight="bold")
 
-    # Make the two plots and their titles not overlap
-    fig.tight_layout()
+    # One legend for the whole figure, above the top plot.
+    # The labels are taken from ax1 (Measurement, Model, Calibration), the
+    # colours are the same in all three plots
+    handles, labels = ax1.get_legend_handles_labels()
+    legend = fig.legend(handles, labels, loc="upper center", ncol=len(labels),
+                        fontsize=fontsize, frameon=False)
+    # Draw the lines in the legend as thick as the bottom plots, so they are easy to see
+    for line in legend.get_lines():
+        line.set_linewidth(linewidth_bottom)
+
+    # Make the plots not overlap, and leave room at the top for the legend
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
 
     # plt.show() waits here until you close the figure window
     fig.savefig("VM_Model_messure.png", dpi=300)
