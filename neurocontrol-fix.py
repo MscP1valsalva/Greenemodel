@@ -87,25 +87,46 @@ import matplotlib.pyplot as plt
 import  sys
 
 k_VM = 0.35  # fraction of the venous drive left during the strain. VALSALVA FIX: was 0.1; 0.35 gives a ~40 % SV drop (84 -> 50 ml)
-def PAS_R(solved_x4):
-        return solved_x4 * L
+R_ven        = 125.0  # venous resistance that is used to convert the flow into a vena cava-like pressure [mmHg*s/l]
+x4_mean_prev = 0.05   # starting value for the mean flow through L during the previous beat [l/s]
 
+def PAS_R(x4):
+    """
+        Venous pressure source [mmHg].
+        The original Greene model has no venous compartment. To represent the
+        pressure that drives blood from the systemic veins into the left atrium,
+        a venous pressure source PAS_R is estimated from the mean flow of the
+        previous beat.
+        PAS_R = R_ven * Q_mean
+        where Q_mean is the mean flow through the arterial inertance L during the
+        previous beat. In steady state the mean arterial and venous flows are equal,
+        so x4_mean_prev is used as a proxy for venous return.
+        The pressure is limited to non-negative values.
+
+    """
+    return R_ven * max(float(x4_mean_prev), 0.0)                   # VENOUS FIX
 
 def PAS_total(t_global, x4):
     """
-        Atrial source pressure [mmHg], PAS = PAS_L*k + PAS_R + ITP.
-        VALSALVA FIX (PAS): the atrium is in the chest, so its pressure rises
-        with the ITP (+l). The ventricle during filling also gets +ITP (see Pv),
-        so the ITP itself cancels in PAS - Pv and does not change the filling.
-        What lowers the venous return is the drive term PAS_L: during the strain
-        it is cut to PAS_L*k_VM (8 -> 2.8 mmHg). Physiologically, PAS_L is the
-        pressure that pushes venous blood from the veins outside the chest into
-        the atrium. Those veins do not get the +40 mmHg, so this push falls.
+        Total atrial source pressure [mmHg].
+        PAS = PAS_L + k*PAS_R + ITP
+        PAS_L:
+            constant baseline left atrial pressure.
+        PAS_R:
+            venous pressure source representing the systemic veins outside the
+        thorax.
+        k:
+            Valsalva scaling factor. During the strain only a fraction k_VM of
+        the venous driving pressure reaches the atrium, representing vena cava
+        compression and reduced venous return.
+        ITP:
+            intrathoracic pressure. The atrium is inside the thorax, so its
+        pressure rises directly with ITP.
+
     """
     k = np.where(ITP(t_global) > 0, k_VM, 1.0)
     l=ITP(t_global)
-    return PAS_L*k + PAS_R(x4) + l   # VALSALVA FIX (PAS): drive PAS_L cut to k_VM in the strain, atrium pressure + ITP   # VALSALVA FIX: venous drive (PAS_L + PAS_R) cut to k_VM in the strain, + ITP because the atrium is in the chest
-
+    return PAS_L + k*PAS_R(x4) + l   # VENOUS FIX: k on PAS_R (the venous drive), PAS_L is the base. + ITP because the atrium is in the chest
 
 def last_x4():
     """
@@ -367,7 +388,6 @@ def HR_neurocontrol(P):
 
 def RR_neurocontrol(EDV, ESV, HR, MAP):
     CO = (EDV - ESV) * HR/60
-    print(EDV, ESV, MAP/CO)
     return MAP/CO
 
 
@@ -445,7 +465,7 @@ h0, h1, h2 = 0.234, 147.0, 106000.0
 # Active elastance ([G] eqns 17, 20-29) - the ventricle during systole
 # ======================================================================
 D = -150
-scale_A = 13    # VALSALVA FIX: was 6.5. Stronger contraction, SV 30 -> 84 ml
+scale_A = 12    # VALSALVA FIX: was 6.5. Stronger contraction, SV 30 -> 84 ml
 scale_B = 0.17  # SHAPE FIX: was 0.2 (0.4 originally). Slightly wider elastance curve; a wider one (0.12) made the valves fail during the strain
 scale_C = 4.7   # SHAPE FIX: was 5.5. Elastance peak earlier, so isovolumic contraction is ~0.12 s instead of ~0.19 s
 afs = 1.080   # NEUROCONTROL: constant amplitude factor of E_H (was the  afs(fs); value at P = 92 mmHg)
@@ -602,6 +622,9 @@ for i in range(n_beats): # one heart beat per loop
     t_end = cycle_offset + sol_filling.t[-1]
     record_meanPB_time.append(t_end)        # HR DELAY: global time at the end of this beat (FIX: this is what was missing)
 
+    x4_all = np.concatenate(record_x4[-4:]) # the last 4 phases from the record_x4 list (the phases from the current beat) is put together in one array, so it contains the x4 values of the whole beat
+    x4_mean_prev = _trapz(x4_all, tt)/(tt[-1] - tt[0])   # the mean flow through L is calculated over the whole beat and stored in x4_mean_prev, which is used by PAS_R in the next beat
+
     #TODO: add RR neural control 
     if t_end < t_close_nc:
         # NEUROCONTROL open loop: HR fixed at rest while the model settles
@@ -627,9 +650,10 @@ for i in range(n_beats): # one heart beat per loop
 
     if t_end > 6: 
         HR_needed = t_end - 6
-        for i in range(len(record_HR_target) -1, -1, -1): 
-            if 6 <= record_meanPB_time[i] <= HR_needed:
-                RR = RR_neurocontrol(record_Ved[i], record_Ves[i], record_HR_target[i], record_meanPB[i]) # EDV, ESV and heart rate 6 seconds ago for the function to calculate the new RR
+        for j in range(len(record_HR_target) -1, -1, -1): 
+            if 6 <= record_meanPB_time[j] <= HR_needed:
+                RR = 700 + RR_neurocontrol(record_Ved[j], record_Ves[j+1], record_HR_target[j], record_meanPB[j]) # EDV, ESV and heart rate 6 seconds ago for the function to calculate the new RR
+                RG = Rb + (R2*RR/(RR + R2))  
                 break
   #print(f"NEUROCONTROL: mean P_RB = {meanPB:.1f} mmHg -> next T = {T_beat:.3f} s ({HR_next:.1f} bpm)")
 
