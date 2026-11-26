@@ -367,7 +367,7 @@ def HR_neurocontrol(P):
 
 def RR_neurocontrol(EDV, ESV, HR, MAP):
     CO = (EDV - ESV) * HR/60
-    print(MAP/CO)
+    print(EDV, ESV, MAP/CO)
     return MAP/CO
 
 
