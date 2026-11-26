@@ -365,6 +365,11 @@ def HR_neurocontrol(P):
     """
     return HR_min_nc + (HR_max_nc - HR_min_nc)/(1 + np.exp(k_nc*(P - P_c_nc)))
 
+def RR_neurocontrol(EDV, ESV, HR, MAP):
+    CO = (EDV - ESV) * HR/60
+    print(MAP/CO)
+    return MAP/CO
+
 
 def store(sol, phase, cycle_offset):
     """
@@ -457,9 +462,8 @@ ejection_end_event.terminal = True
 ejection_end_event.direction = +1 # PA - Pv goes from negative to positive when Pv becomes less than PA
 # ======================================================================
 # Peripheral resistance (NEUROCONTROL: constant, no reflex on RR)
-# ======================================================================
-RR_base = 8550*0.2                  # RR. CHANGED FROM [G]: 8550 -> 8550*0.2 #? but why?
-RR = RR_base                        # NEUROCONTROL: RR is constant (the Ursino RR reflex was removed)
+# ======================================================================                # RR. CHANGED FROM [G]: 8550 -> 8550*0.2 #? but why?
+RR = 8550*0.2                         # NEUROCONTROL: RR is constant (the Ursino RR reflex was removed)
 RG = Rb + (R2*RR/(RR + R2))         # [G] eqn 16. Constant now that RR is constant
 
 # ======================================================================
@@ -490,6 +494,7 @@ record_T_beat, record_meanPB, record_beat_start = [], [], []  # one value per be
 record_meanPB_time = []  # HR DELAY: global time at the end of each beat, when its meanPB was measured
 record_HR_target = []  # NEUROCONTROL: HR asked for by the curve after each beat
 record_t1, record_t2, record_t3, record_t_fill = [], [], [], []  # NEUROCONTROL: length of each phase, per beat [s]
+record_Ved, record_Ves = [], [] # EDV and ESV 
 
 # solve_ivp settings
 t_span = (0, 1)   # A maximal cutoff for every phase (this should never be reached, the events stop it first)
@@ -515,7 +520,6 @@ for i in range(n_beats): # one heart beat per loop
     PAS = float(PAS_total(cycle_offset, x4_beat))
     record_PAS.append(PAS)
     # NEUROCONTROL: RR is constant now (set with the parameters), so the per-beat
-    # RR = RR_base*kR and RG lines were removed.
 
     # --- Start state of this beat ---
     # First beat: a state taken from the end of an earlier run, so the model starts
@@ -549,6 +553,8 @@ for i in range(n_beats): # one heart beat per loop
     #print(sol_ejection.status)
     #print("RR",RR)
     store(sol_ejection, "ejection", cycle_offset)
+    Ves = sol_ejection.y[1,-1] # ESV after the ejection 
+    record_Ves.append(Ves) # stored the ESV for later use
 
     # --- 3. Isovolumic relaxation ([G] eqns 7-10, the same equations as the contraction) ---
     # Stops when Pv falls below PAS (relaxation_end_event), at the latest after 0.25 s
@@ -579,6 +585,7 @@ for i in range(n_beats): # one heart beat per loop
     sol_filling = solve_ivp(filling_rhs, fill_span, x0, args=(Ved,  cycle_offset),
                              max_step=max_step)
     Ved = sol_filling.y[1,-1] # End-diastolic volume = the volume at the end of filling, used by E_H in the next beat (Frank-Starling)
+    record_Ved.append(Ved) # Store for later use
     #print("Filling phase completed at t =", sol_filling.t[-1])
     #print(sol_filling.status)
     store(sol_filling, "filling", cycle_offset)
@@ -595,6 +602,7 @@ for i in range(n_beats): # one heart beat per loop
     t_end = cycle_offset + sol_filling.t[-1]
     record_meanPB_time.append(t_end)        # HR DELAY: global time at the end of this beat (FIX: this is what was missing)
 
+    #TODO: add RR neural control 
     if t_end < t_close_nc:
         # NEUROCONTROL open loop: HR fixed at rest while the model settles
         HR_next = HR_rest_nc
@@ -602,7 +610,7 @@ for i in range(n_beats): # one heart beat per loop
         if P_c_nc is None:
             # NEUROCONTROL set point = this model's resting RB pressure (mean of the last open-loop beats)
             P_c_nc = float(np.mean(record_meanPB[-n_setpoint_nc:]))
-            print(f"NEUROCONTROL: loop closed at t = {t_end:.1f} s, set point P_c = {P_c_nc:.1f} mmHg")
+            #print(f"NEUROCONTROL: loop closed at t = {t_end:.1f} s, set point P_c = {P_c_nc:.1f} mmHg")
         # ---- NEUROCONTROL step 2: map the pressure from D_HR_nc seconds ago to heart rate ----
         # HR DELAY: only closed-loop measurements that are at least D_HR_nc old are used.
         # Search from the newest beat backwards and take the first one that is old enough.
@@ -616,7 +624,14 @@ for i in range(n_beats): # one heart beat per loop
 
     # ---- NEUROCONTROL step 3: heart period of the next beat ----
     T_beat = 60/HR_next
-    #print(f"NEUROCONTROL: mean P_RB = {meanPB:.1f} mmHg -> next T = {T_beat:.3f} s ({HR_next:.1f} bpm)")
+
+    if t_end > 6: 
+        HR_needed = t_end - 6
+        for i in range(len(record_HR_target) -1, -1, -1): 
+            if 6 <= record_meanPB_time[i] <= HR_needed:
+                RR = RR_neurocontrol(record_Ved[i], record_Ves[i], record_HR_target[i], record_meanPB[i]) # EDV, ESV and heart rate 6 seconds ago for the function to calculate the new RR
+                break
+  #print(f"NEUROCONTROL: mean P_RB = {meanPB:.1f} mmHg -> next T = {T_beat:.3f} s ({HR_next:.1f} bpm)")
 
     # The next beat starts where this one ended. sol_filling.t[-1] is the local
     # end time of the beat = the length of the beat
