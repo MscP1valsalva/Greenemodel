@@ -443,7 +443,7 @@ def store(sol, phase, cycle_offset):
 # Heart parameters ([G] eqn 31) and the Valsalva manoeuvre
 # ======================================================================
 Rm  = 12    # mitral valve resistance, mmHg*s/l (altered from 0.33 to 12 to match the correct physiological range)
-PAS_L=8   # VALSALVA FIX: was 5. 8 mmHg is a normal left-atrial pressure and gives EDV ~130 ml
+PAS_L= 2   # VALSALVA FIX: was 5. 8 mmHg is a normal left-atrial pressure and gives EDV ~130 ml
 start_time_VM = 40
 end_time_VM = start_time_VM + 15
 Ra = 0.6*20
