@@ -88,6 +88,8 @@ import  sys
 
 k_VM = 0.35  # fraction of the venous drive left during the strain. VALSALVA FIX: was 0.1; 0.35 gives a ~40 % SV drop (84 -> 50 ml)
 R_ven        = 125.0  # venous resistance that is used to convert the flow into a vena cava-like pressure [mmHg*s/l]
+A_reb   = 1.0   # REBOUND: extra venous drive right after release, as a fraction of PAS_R (1.0 = doubled). ASSUMED, tuned for a 20-30 mmHg overshoot
+tau_reb = 5.0   # REBOUND: how fast the extra drive fades, s. ASSUMED
 x4_mean_prev = 0.05   # starting value for the mean flow through L during the previous beat [l/s]
 
 def PAS_R(x4):
@@ -125,6 +127,8 @@ def PAS_total(t_global, x4):
 
     """
     k = np.where(ITP(t_global) > 0, k_VM, 1.0)
+    dt_rel = np.asarray(t_global) - end_time_VM                                        # REBOUND: time since the release [s] (negative before it)
+    k = k + np.where(dt_rel > 0, A_reb*np.exp(-np.maximum(dt_rel, 0)/tau_reb), 0.0)     # REBOUND: extra venous drive after release, fades with tau_reb
     l=ITP(t_global)
     return PAS_L + k*PAS_R(x4) + l   # VENOUS FIX: k on PAS_R (the venous drive), PAS_L is the base. + ITP because the atrium is in the chest
 
@@ -223,7 +227,7 @@ def E_H(Ved, t): #TODO move all variables/constants to the top, then functions t
             -> the peak of about 2250 mmHg/l (2.25 mmHg/ml) is at t = 0.32 s
     """
     # NEUROCONTROL: afs and bfs are now constants (see the parameters), the
-   
+
 
     # Add up the three Gaussians of [G] eqn 17. The for loop takes one
     # (A, B, C) triple at a time.
@@ -443,7 +447,7 @@ def store(sol, phase, cycle_offset):
 # Heart parameters ([G] eqn 31) and the Valsalva manoeuvre
 # ======================================================================
 Rm  = 12    # mitral valve resistance, mmHg*s/l (altered from 0.33 to 12 to match the correct physiological range)
-PAS_L= 2   # VALSALVA FIX: was 5. 8 mmHg is a normal left-atrial pressure and gives EDV ~130 ml
+PAS_L=2   # VALSALVA FIX: was 5. 8 mmHg is a normal left-atrial pressure and gives EDV ~130 ml
 start_time_VM = 40
 end_time_VM = start_time_VM + 15
 Ra = 0.6*20
@@ -514,7 +518,7 @@ record_T_beat, record_meanPB, record_beat_start = [], [], []  # one value per be
 record_meanPB_time = []  # HR DELAY: global time at the end of each beat, when its meanPB was measured
 record_HR_target = []  # NEUROCONTROL: HR asked for by the curve after each beat
 record_t1, record_t2, record_t3, record_t_fill = [], [], [], []  # NEUROCONTROL: length of each phase, per beat [s]
-record_Ved, record_Ves = [], [] # EDV and ESV 
+record_Ved, record_Ves = [], [] # EDV and ESV
 
 # solve_ivp settings
 t_span = (0, 1)   # A maximal cutoff for every phase (this should never be reached, the events stop it first)
@@ -573,7 +577,7 @@ for i in range(n_beats): # one heart beat per loop
     #print(sol_ejection.status)
     #print("RR",RR)
     store(sol_ejection, "ejection", cycle_offset)
-    Ves = sol_ejection.y[1,-1] # ESV after the ejection 
+    Ves = sol_ejection.y[1,-1] # ESV after the ejection
     record_Ves.append(Ves) # stored the ESV for later use
 
     # --- 3. Isovolumic relaxation ([G] eqns 7-10, the same equations as the contraction) ---
@@ -625,7 +629,7 @@ for i in range(n_beats): # one heart beat per loop
     x4_all = np.concatenate(record_x4[-4:]) # the last 4 phases from the record_x4 list (the phases from the current beat) is put together in one array, so it contains the x4 values of the whole beat
     x4_mean_prev = _trapz(x4_all, tt)/(tt[-1] - tt[0])   # the mean flow through L is calculated over the whole beat and stored in x4_mean_prev, which is used by PAS_R in the next beat
 
-    #TODO: add RR neural control 
+    #TODO: add RR neural control
     if t_end < t_close_nc:
         # NEUROCONTROL open loop: HR fixed at rest while the model settles
         HR_next = HR_rest_nc
@@ -648,12 +652,12 @@ for i in range(n_beats): # one heart beat per loop
     # ---- NEUROCONTROL step 3: heart period of the next beat ----
     T_beat = 60/HR_next
 
-    if t_end > 6: 
+    if t_end > t_close_nc + 6:                                            # RR FIX: RR control only after the loop is closed (P_c_nc exists) + 6 s delay
         HR_needed = t_end - 6
-        for j in range(len(record_HR_target) -1, -1, -1): 
-            if 6 <= record_meanPB_time[j] <= HR_needed:
-                RR = 700 + RR_neurocontrol(record_Ved[j], record_Ves[j+1], record_HR_target[j], record_meanPB[j]) # EDV, ESV and heart rate 6 seconds ago for the function to calculate the new RR
-                RG = Rb + (R2*RR/(RR + R2))  
+        for j in range(len(record_HR_target) -1, -1, -1):
+            if t_close_nc <= record_meanPB_time[j] <= HR_needed:          # RR FIX: only closed-loop beats, at least 6 s old
+                RR = 700 + RR_neurocontrol(record_Ved[j], record_Ves[j+1], record_HR_target[j], P_c_nc) # RR FIX: set point P_c_nc instead of the measured record_meanPB[j]
+                RG = Rb + (R2*RR/(RR + R2))
                 break
   #print(f"NEUROCONTROL: mean P_RB = {meanPB:.1f} mmHg -> next T = {T_beat:.3f} s ({HR_next:.1f} bpm)")
 
