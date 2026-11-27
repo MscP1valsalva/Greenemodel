@@ -443,7 +443,7 @@ def store(sol, phase, cycle_offset):
 # Heart parameters ([G] eqn 31) and the Valsalva manoeuvre
 # ======================================================================
 Rm  = 12    # mitral valve resistance, mmHg*s/l (altered from 0.33 to 12 to match the correct physiological range)
-PAS_L=8   # VALSALVA FIX: was 5. 8 mmHg is a normal left-atrial pressure and gives EDV ~130 ml
+PAS_L= 2   # VALSALVA FIX: was 5. 8 mmHg is a normal left-atrial pressure and gives EDV ~130 ml
 start_time_VM = 60
 end_time_VM = start_time_VM + 15
 Ra = 0.6*20
@@ -490,11 +490,11 @@ RG = Rb + (R2*RR/(RR + R2))         # [G] eqn 16. Constant now that RR is consta
 # NEUROCONTROL parameters ([K], resting values from Ogoh 2003)
 # ======================================================================
 HR_rest_nc  = 64.0              # resting heart rate, bpm (Ogoh 2003, Table 1, rest)
-HR_range_nc = 26.0              # HR_max - HR_min, bpm (Ogoh 2003, rest)
+HR_range_nc = 120.0              # HR_max - HR_min, bpm (Ogoh 2003, rest)
 G_max_nc    = -0.35             # max gain at P_c, bpm/mmHg (typical resting value, assumed)
 HR_max_nc   = HR_rest_nc + HR_range_nc/2     # highest HR (low pressure), 77 bpm
 HR_min_nc   = HR_rest_nc - HR_range_nc/2     # lowest HR (high pressure), 51 bpm
-k_nc        = -4*G_max_nc/HR_range_nc        # steepness, 1/mmHg (from G_max = -(HR_max - HR_min)*k/4)
+k_nc        = -10*G_max_nc/HR_range_nc        # steepness, 1/mmHg (from G_max = -(HR_max - HR_min)*k/4)
 D_HR_nc     = 2.0               # HR DELAY: pure delay between the RB pressure and the heart rate, s
 t_close_nc  = 20.0              # s: open loop before this time, closed loop after (strain starts at start_time_VM)
 n_setpoint_nc = 5               # number of beats averaged to find P_c
@@ -652,7 +652,7 @@ for i in range(n_beats): # one heart beat per loop
         HR_needed = t_end - 6
         for j in range(len(record_HR_target) -1, -1, -1): 
             if 6 <= record_meanPB_time[j] <= HR_needed:
-                RR = 700 + RR_neurocontrol(record_Ved[j], record_Ves[j+1], record_HR_target[j], record_meanPB[j+1]) # EDV, ESV and heart rate 6 seconds ago for the function to calculate the new RR
+                RR = 700 + RR_neurocontrol(record_Ved[j], record_Ves[j+1], record_HR_target[j], record_meanPB[j]) # EDV, ESV and heart rate 6 seconds ago for the function to calculate the new RR
                 RG = Rb + (R2*RR/(RR + R2))  
                 break
   #print(f"NEUROCONTROL: mean P_RB = {meanPB:.1f} mmHg -> next T = {T_beat:.3f} s ({HR_next:.1f} bpm)")

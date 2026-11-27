@@ -490,11 +490,11 @@ RG = Rb + (R2*RR/(RR + R2))         # [G] eqn 16. Constant now that RR is consta
 # NEUROCONTROL parameters ([K], resting values from Ogoh 2003)
 # ======================================================================
 HR_rest_nc  = 64.0              # resting heart rate, bpm (Ogoh 2003, Table 1, rest)
-HR_range_nc = 26.0              # HR_max - HR_min, bpm (Ogoh 2003, rest)
+HR_range_nc = 120.0              # HR_max - HR_min, bpm (Ogoh 2003, rest)
 G_max_nc    = -0.35             # max gain at P_c, bpm/mmHg (typical resting value, assumed)
 HR_max_nc   = HR_rest_nc + HR_range_nc/2     # highest HR (low pressure), 77 bpm
 HR_min_nc   = HR_rest_nc - HR_range_nc/2     # lowest HR (high pressure), 51 bpm
-k_nc        = -4*G_max_nc/HR_range_nc        # steepness, 1/mmHg (from G_max = -(HR_max - HR_min)*k/4)
+k_nc        = -10*G_max_nc/HR_range_nc        # steepness, 1/mmHg (from G_max = -(HR_max - HR_min)*k/4)
 D_HR_nc     = 2.0               # HR DELAY: pure delay between the RB pressure and the heart rate, s
 t_close_nc  = 20.0              # s: open loop before this time, closed loop after (strain starts at start_time_VM)
 n_setpoint_nc = 5               # number of beats averaged to find P_c
